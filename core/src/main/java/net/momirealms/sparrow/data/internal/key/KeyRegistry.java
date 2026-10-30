@@ -52,13 +52,13 @@ public final class KeyRegistry<K> {
 
     private record Table<K>(@NotNull Map<Key, AbstractDataKey<K>> byId, @NotNull List<AbstractDataKey<K>> memoryKeys) {
 
-        // todo 是否存在重复复制?
+        // byId 是调用方刚复制出来的新 Map, 交出去之后不再修改. volatile 写入保证读的一方看到完整内容, 不需要再复制一次
         @NotNull
         static <K> Table<K> of(@NotNull Map<Key, AbstractDataKey<K>> byId) {
             List<AbstractDataKey<K>> memoryKeys = byId.values().stream()
                     .filter(key -> key instanceof MemoryDataKey<?>)
                     .toList();
-            return new Table<>(Map.copyOf(byId), memoryKeys);
+            return new Table<>(byId, memoryKeys);
         }
     }
 }
