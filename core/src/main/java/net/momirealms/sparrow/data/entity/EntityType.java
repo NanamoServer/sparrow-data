@@ -1,0 +1,71 @@
+package net.momirealms.sparrow.data.entity;
+
+import com.mojang.serialization.Codec;
+import net.momirealms.sparrow.data.Key;
+import net.momirealms.sparrow.data.RankEntry;
+import net.momirealms.sparrow.data.key.DataKey;
+import net.momirealms.sparrow.data.key.EntryKeyCodec;
+import net.momirealms.sparrow.data.key.SortableKey;
+import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.DbMapCounterKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+
+public interface EntityType<K> {
+
+    @NotNull
+    String name();
+
+    @NotNull
+    Entity<K> entity(@NotNull K id);
+
+    @NotNull
+    Residence<K> residence();
+
+    @NotNull
+    <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue);
+
+    @NotNull
+    <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull Codec<T> codec);
+
+    @NotNull
+    MemoryLongKeyBuilder<K> memoryLong(@NotNull Key id);
+
+    @NotNull
+    <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec);
+
+    @NotNull
+    <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue);
+
+    @NotNull
+    <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull Codec<T> codec);
+
+    @NotNull
+    DbCounterKeyBuilder<K> dbCounter(@NotNull Key id);
+
+    @NotNull
+    <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec);
+
+    @NotNull
+    <E> DbMapCounterKeyBuilder<K, E> dbMapCounter(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec);
+
+    @NotNull
+    CompletableFuture<Void> unregister(@NotNull DataKey<K> key);
+
+    @NotNull
+    CompletableFuture<Void> purge(@NotNull Key id);
+
+    @NotNull
+    CompletableFuture<List<RankEntry<K>>> top(@NotNull SortableKey<K> key, int offset, int limit);
+
+    @NotNull
+    CompletableFuture<Long> rankOf(@NotNull SortableKey<K> key, @NotNull K id);
+}
