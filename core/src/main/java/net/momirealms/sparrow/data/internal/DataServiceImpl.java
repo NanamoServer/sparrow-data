@@ -1,11 +1,14 @@
 package net.momirealms.sparrow.data.internal;
 
+import io.lettuce.core.api.StatefulRedisConnection;
 import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.data.DataService;
 import net.momirealms.sparrow.data.Transaction;
 import net.momirealms.sparrow.data.entity.EntityIdCodec;
 import net.momirealms.sparrow.data.entity.EntityType;
 import net.momirealms.sparrow.data.internal.db.TransactionImpl;
+import net.momirealms.sparrow.data.internal.memory.AutoSaver;
+import net.momirealms.sparrow.data.internal.redis.ReplicaStore;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.redis.messagebroker.Logger;
@@ -27,18 +30,31 @@ public final class DataServiceImpl implements DataService {
 
     private final EntityStorage storage;
     private final Executor executor;
+    private final ReplicaStore replicas;
     private final DataMessenger<?> messenger;
     private final Logger logger;
+    private final AutoSaver autoSaver;
     private final Duration snapshotExpiry;
 
     private final Map<String, EntityTypeImpl<?>> entityTypes = new ConcurrentHashMap<>();
 
     // 组装数据层. 构造时在 broker 上注册失效和覆盖消息, 所以同一个频道上的服务器要在同样的位置构造, 并且在 broker.subscribe() 之前
-    public DataServiceImpl(@NotNull EntityStorage storage, @NotNull Executor executor, @NotNull MessageBroker<? extends ByteBuf> broker, @NotNull Logger logger, @NotNull Duration snapshotExpiry) {
+    public DataServiceImpl(
+            @NotNull EntityStorage storage,
+            @NotNull Executor executor,
+            @NotNull StatefulRedisConnection<byte[], byte[]> redis,
+            @NotNull MessageBroker<? extends ByteBuf> broker,
+            @NotNull Logger logger,
+            @NotNull Duration saveInterval,
+            @NotNull Duration replicaTtl,
+            @NotNull Duration snapshotExpiry
+    ) {
         this.storage = storage;
         this.executor = executor;
+        this.replicas = new ReplicaStore(redis, replicaTtl);
         this.messenger = DataMessenger.register(broker);
         this.logger = logger;
+        this.autoSaver = new AutoSaver(saveInterval);
         this.snapshotExpiry = snapshotExpiry;
     }
 
@@ -77,6 +93,11 @@ public final class DataServiceImpl implements DataService {
     }
 
     @NotNull
+    public ReplicaStore replicas() {
+        return this.replicas;
+    }
+
+    @NotNull
     public DataMessenger<?> messenger() {
         return this.messenger;
     }
@@ -84,6 +105,11 @@ public final class DataServiceImpl implements DataService {
     @NotNull
     public Logger logger() {
         return this.logger;
+    }
+
+    @NotNull
+    public AutoSaver autoSaver() {
+        return this.autoSaver;
     }
 
     @NotNull

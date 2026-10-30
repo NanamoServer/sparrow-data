@@ -37,7 +37,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @Override
     public boolean isHeld() {
-        throw new UnsupportedOperationException("Not implemented yet");
+        return this.type.held(this.id) != null;
     }
 
     @NotNull
@@ -99,16 +99,18 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         throw new UnsupportedOperationException("Not implemented yet");
     }
 
+    // 排进这个实体的落库链, future 在这次存储调用完成后结束
     @NotNull
     @Override
     public CompletableFuture<Void> save() {
-        throw new UnsupportedOperationException("Not implemented yet");
+        DataServiceImpl service = this.type.service();
+        return this.requireHeld().save(service.storage(), service.executor());
     }
 
     @NotNull
     @Override
     public CompletableFuture<Void> saveAndPublish() {
-        throw new UnsupportedOperationException("Not implemented yet");
+        return this.save();
     }
 
     @NotNull
