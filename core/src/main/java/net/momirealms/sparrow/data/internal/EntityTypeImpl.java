@@ -18,6 +18,7 @@ import net.momirealms.sparrow.data.internal.key.builder.DbMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryMapKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.key.DataKey;
@@ -40,8 +41,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ApiStatus.Internal
 public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Listener {
@@ -53,6 +56,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     private final KeyRegistry<K> keys = new KeyRegistry<>();
     private final SnapshotCache<K> snapshots;
     private final DbOperations<K> db;
+    private final Map<K, HeldEntity<K>> heldEntities = new ConcurrentHashMap<>();
 
     // 一个实体类型在运行时的实现, 注册的键都登记在它自己的键表里. 它也是这个类型的消息接收方, 收到失效就让对应的快照重读
     public EntityTypeImpl(@NotNull DataServiceImpl service, @NotNull String name, @NotNull EntityIdCodec<K> idCodec) {
@@ -195,6 +199,12 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         byte[] encoded = this.idCodec.encode(id);
         if (encoded.length > MAX_ENTITY_ID_LENGTH) throw new IllegalArgumentException("Encoded entity id is longer than " + MAX_ENTITY_ID_LENGTH + " bytes: " + id);
         return new EntityRef(this.name, encoded);
+    }
+
+    // 本服持有这个实体时返回它的持有容器, 否则返回 null
+    @Nullable
+    public HeldEntity<K> held(@NotNull K id) {
+        return this.heldEntities.get(id);
     }
 
     @NotNull
