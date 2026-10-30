@@ -87,6 +87,11 @@ public final class MysqlEntityStorage implements EntityStorage {
     }
 
     @Override
+    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected) {
+        return this.withConnection(storage -> storage.compareAndRemove(entity, key, entry, expected));
+    }
+
+    @Override
     public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
         return this.withConnection(storage -> storage.remove(entity, key, entry));
     }

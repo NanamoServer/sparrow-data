@@ -81,6 +81,11 @@ record PostgresTables(@NotNull String data, @NotNull String ranked, @NotNull Str
     }
 
     @NotNull
+    String compareAndRemoveData() {
+        return "DELETE FROM " + this.data + " WHERE entity_id = ? AND path = ? AND val = ?";
+    }
+
+    @NotNull
     String deleteRow() {
         return "DELETE FROM " + this.data + " WHERE entity_id = ? AND path = ?";
     }

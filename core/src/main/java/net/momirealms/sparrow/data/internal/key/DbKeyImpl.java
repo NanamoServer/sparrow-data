@@ -7,7 +7,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
-public final class DbKeyImpl<K, T> extends AbstractDataKey<K> implements DbKey<K, T> {
+public final class DbKeyImpl<K, T> extends AbstractDataKey<K> implements DbKey<K, T>, ValueKeyImpl<K, T> {
     private final ValueForm<T> form;
 
     public DbKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type, @NotNull ValueForm<T> form) {
@@ -16,6 +16,7 @@ public final class DbKeyImpl<K, T> extends AbstractDataKey<K> implements DbKey<K
     }
 
     @NotNull
+    @Override
     public ValueForm<T> form() {
         return this.form;
     }

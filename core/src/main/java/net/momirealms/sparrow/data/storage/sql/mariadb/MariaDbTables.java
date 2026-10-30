@@ -76,6 +76,11 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
     }
 
     @NotNull
+    String compareAndRemoveData() {
+        return "DELETE FROM " + this.data + " WHERE entity_id = ? AND path = ? AND val = ?";
+    }
+
+    @NotNull
     String updateDataNum() {
         return "UPDATE " + this.data + " SET num = ? WHERE entity_id = ? AND path = ?";
     }

@@ -8,7 +8,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
-public final class DbMapCounterKeyImpl<K, E> extends AbstractDataKey<K> implements DbMapCounterKey<K, E> {
+public final class DbMapCounterKeyImpl<K, E> extends AbstractDataKey<K> implements DbMapCounterKey<K, E>, MapKeyImpl<K, E, Long> {
     private final EntryKeyCodec<E> entryCodec;
 
     public DbMapCounterKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type, @NotNull EntryKeyCodec<E> entryCodec) {
@@ -17,11 +17,13 @@ public final class DbMapCounterKeyImpl<K, E> extends AbstractDataKey<K> implemen
     }
 
     @NotNull
+    @Override
     public EntryKeyCodec<E> entryCodec() {
         return this.entryCodec;
     }
 
     @NotNull
+    @Override
     public ValueForm.LongForm valueForm() {
         return ValueForm.LongForm.ZERO;
     }

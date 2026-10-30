@@ -232,6 +232,18 @@ final class MysqlConnectionStorage implements EntityStorage {
     }
 
     @Override
+    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected) {
+        MysqlTables tables = this.tables(entity.entityType());
+        return this.execute("compare and remove " + key.id(), () -> {
+            try (PreparedStatement statement = this.connection.prepareStatement(tables.compareAndRemoveData())) {
+                bindTarget(statement, 1, entity, key, entry);
+                statement.setBytes(3, expected);
+                return statement.executeUpdate() > 0;
+            }
+        });
+    }
+
+    @Override
     public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("remove " + key.id(), () -> {

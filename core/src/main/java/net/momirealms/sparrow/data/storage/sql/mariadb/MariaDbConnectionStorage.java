@@ -229,6 +229,18 @@ final class MariaDbConnectionStorage implements EntityStorage {
     }
 
     @Override
+    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected) {
+        MariaDbTables tables = this.tables(entity.entityType());
+        return this.execute("compare and remove " + key.id(), () -> {
+            try (PreparedStatement statement = this.connection.prepareStatement(tables.compareAndRemoveData())) {
+                bindTarget(statement, 1, entity, key, entry);
+                statement.setBytes(3, expected);
+                return statement.executeUpdate() > 0;
+            }
+        });
+    }
+
+    @Override
     public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
         MariaDbTables tables = this.tables(entity.entityType());
         return this.execute("remove " + key.id(), () -> {

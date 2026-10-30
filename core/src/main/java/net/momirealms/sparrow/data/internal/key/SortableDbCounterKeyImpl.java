@@ -7,13 +7,14 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
-public final class SortableDbCounterKeyImpl<K> extends AbstractDataKey<K> implements SortableDbCounterKey<K> {
+public final class SortableDbCounterKeyImpl<K> extends AbstractDataKey<K> implements SortableDbCounterKey<K>, ValueKeyImpl<K, Long> {
 
     public SortableDbCounterKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type) {
         super(id, type, true);
     }
 
     @NotNull
+    @Override
     public ValueForm.LongForm form() {
         return ValueForm.LongForm.ZERO;
     }

@@ -8,7 +8,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
-public final class DbMapKeyImpl<K, E, V> extends AbstractDataKey<K> implements DbMapKey<K, E, V> {
+public final class DbMapKeyImpl<K, E, V> extends AbstractDataKey<K> implements DbMapKey<K, E, V>, MapKeyImpl<K, E, V> {
     private final EntryKeyCodec<E> entryCodec;
     private final ValueForm<V> valueForm;
 
@@ -19,11 +19,13 @@ public final class DbMapKeyImpl<K, E, V> extends AbstractDataKey<K> implements D
     }
 
     @NotNull
+    @Override
     public EntryKeyCodec<E> entryCodec() {
         return this.entryCodec;
     }
 
     @NotNull
+    @Override
     public ValueForm<V> valueForm() {
         return this.valueForm;
     }

@@ -7,7 +7,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
-public final class SortableMemoryKeyImpl<K> extends AbstractDataKey<K> implements SortableMemoryKey<K> {
+public final class SortableMemoryKeyImpl<K> extends AbstractDataKey<K> implements SortableMemoryKey<K>, ValueKeyImpl<K, Long> {
     private final ValueForm.LongForm form;
 
     public SortableMemoryKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type, @NotNull ValueForm.LongForm form) {
@@ -16,6 +16,7 @@ public final class SortableMemoryKeyImpl<K> extends AbstractDataKey<K> implement
     }
 
     @NotNull
+    @Override
     public ValueForm.LongForm form() {
         return this.form;
     }
