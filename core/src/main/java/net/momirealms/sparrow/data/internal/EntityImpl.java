@@ -1,12 +1,14 @@
 package net.momirealms.sparrow.data.internal;
 
 import net.momirealms.sparrow.data.entity.Entity;
+import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.DbKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapCounterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
+import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
 import net.momirealms.sparrow.data.key.DbMapCounterKey;
@@ -53,7 +55,9 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @Override
     public <T> void writeAndPublish(@NotNull MemoryKey<K, T> key, @NotNull T value) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        HeldEntity<K> held = this.requireHeld();
+        held.write((ValueKeyImpl<K, T>) key, value);
+        this.enqueuePublish(held, (AbstractDataKey<K>) key);
     }
 
     @NotNull
@@ -96,7 +100,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @Override
     public void publish(@NotNull MemoryDataKey<K> key) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        this.enqueuePublish(this.requireHeld(), (AbstractDataKey<K>) key);
     }
 
     // 排进这个实体的落库链, future 在这次存储调用完成后结束
@@ -107,10 +111,13 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.requireHeld().save(service.storage(), service.executor());
     }
 
+    // 落库和 publish 各自排进自己的链, future 在两者都完成后结束. 只 publish 本次持有期间 publish 过的键
     @NotNull
     @Override
     public CompletableFuture<Void> saveAndPublish() {
-        return this.save();
+        HeldEntity<K> held = this.requireHeld();
+        DataServiceImpl service = this.type.service();
+        return CompletableFuture.allOf(held.save(service.storage(), service.executor()), held.publishAll(service.publisher()));
     }
 
     @NotNull
@@ -137,14 +144,15 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         throw new UnsupportedOperationException("Not implemented yet");
     }
 
-    // 内存键在本服持有时直接读容器. DB 键读快照, 读取函数在调用之前就编码好实体 ID, 交给快照后不会再抛异常
+    // 内存键在本服持有时直接读容器, 其他情况读快照. 读取函数在调用之前就编码好实体 ID, 交给快照后不会再抛异常
     @Nullable
     @Override
     public <T> T peek(@NotNull ValueKey<K, T> key) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
-        if (key instanceof MemoryDataKey<?>) return this.heldForRead().get(impl);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return held.get(impl);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().read(ref, impl));
+        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.load(ref, impl));
     }
 
     @Nullable
@@ -152,15 +160,16 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <E, V> V peek(@NotNull MapKey<K, E, V> key, @NotNull E entry) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
         String encoded = impl.entryCodec().encode(entry);
-        if (key instanceof MemoryDataKey<?>) return this.heldForRead().get(impl, encoded);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return held.get(impl, encoded);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peekEntry(this.id, impl.storageKey().id(), encoded, () -> this.type.db().readEntry(ref, impl, encoded));
+        return this.type.snapshots().peekEntry(this.id, impl.storageKey().id(), encoded, () -> this.loadEntry(ref, impl, encoded));
     }
 
     // 本服持有时内存键的条目总是已加载
     @Override
     public <E> boolean isLoaded(@NotNull MapKey<K, E, ?> key, @NotNull E entry) {
-        if (key instanceof MemoryDataKey<?> && this.type.held(this.id) != null) return true;
+        if (this.heldFor(key) != null) return true;
         MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
         return this.type.snapshots().isEntryLoaded(this.id, impl.storageKey().id(), impl.entryCodec().encode(entry));
     }
@@ -169,17 +178,19 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @Override
     public <E, V> Map<E, V> peekAll(@NotNull MapKey<K, E, V> key) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        if (key instanceof MemoryDataKey<?>) return this.heldForRead().getAll(impl);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return held.getAll(impl);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().readAll(ref, impl));
+        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.loadAll(ref, impl));
     }
 
     @NotNull
     @Override
     public <T> CompletableFuture<T> read(@NotNull ValueKey<K, T> key) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
-        if (key instanceof MemoryDataKey<?>) return CompletableFuture.completedFuture(this.heldForRead().get(impl));
-        return this.type.db().read(this.ref(), impl);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return CompletableFuture.completedFuture(held.get(impl));
+        return this.load(this.ref(), impl);
     }
 
     @NotNull
@@ -187,16 +198,18 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <E, V> CompletableFuture<@Nullable V> read(@NotNull MapKey<K, E, V> key, @NotNull E entry) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
         String encoded = impl.entryCodec().encode(entry);
-        if (key instanceof MemoryDataKey<?>) return CompletableFuture.completedFuture(this.heldForRead().get(impl, encoded));
-        return this.type.db().readEntry(this.ref(), impl, encoded);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return CompletableFuture.completedFuture(held.get(impl, encoded));
+        return this.loadEntry(this.ref(), impl, encoded);
     }
 
     @NotNull
     @Override
     public <E, V> CompletableFuture<Map<E, V>> readAll(@NotNull MapKey<K, E, V> key) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        if (key instanceof MemoryDataKey<?>) return CompletableFuture.completedFuture(this.heldForRead().getAll(impl));
-        return this.type.db().readAll(this.ref(), impl);
+        HeldEntity<K> held = this.heldFor(key);
+        if (held != null) return CompletableFuture.completedFuture(held.getAll(impl));
+        return this.loadAll(this.ref(), impl);
     }
 
     @NotNull
@@ -299,10 +312,38 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return held;
     }
 
+    // publish 没有调用方等结果, 失败在这里记日志
+    private void enqueuePublish(@NotNull HeldEntity<K> held, @NotNull AbstractDataKey<K> key) {
+        DataServiceImpl service = this.type.service();
+        held.publish(service.publisher(), key).whenComplete((ignored, error) -> {
+            if (error != null) {
+                service.logger().error("Failed to publish " + this.type.name() + " " + this.id + " " + key.id(), error);
+            }
+        });
+    }
+
+    // 内存键在本服持有时返回它的容器, 其他情况返回 null
+    @Nullable
+    private HeldEntity<K> heldFor(@NotNull DataKey<K> key) {
+        return key instanceof MemoryDataKey<?> ? this.type.held(this.id) : null;
+    }
+
+    // 读权威位置. DB 键读存储; 本服没有持有的内存键先读副本, 没有副本再读存储
     @NotNull
-    private HeldEntity<K> heldForRead() {
-        HeldEntity<K> held = this.type.held(this.id);
-        if (held == null) throw new UnsupportedOperationException("Not implemented yet");
-        return held;
+    private <T> CompletableFuture<T> load(@NotNull EntityRef ref, @NotNull ValueKeyImpl<K, T> key) {
+        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().read(ref, key);
+        return this.type.db().read(ref, key);
+    }
+
+    @NotNull
+    private <V> CompletableFuture<@Nullable V> loadEntry(@NotNull EntityRef ref, @NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry) {
+        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().readEntry(ref, key, entry);
+        return this.type.db().readEntry(ref, key, entry);
+    }
+
+    @NotNull
+    private <E, V> CompletableFuture<Map<E, V>> loadAll(@NotNull EntityRef ref, @NotNull MapKeyImpl<K, E, V> key) {
+        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().readAll(ref, key);
+        return this.type.db().readAll(ref, key);
     }
 }

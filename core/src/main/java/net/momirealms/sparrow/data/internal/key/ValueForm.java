@@ -20,6 +20,13 @@ public sealed interface ValueForm<T> {
     @Nullable
     T load(@Nullable StoredValue stored);
 
+    // 副本里的值统一是 NBT 二进制, long 值也编码成 NBT. 返回 null 表示发布的是"没有值", 副本里存空值
+    byte @Nullable [] replica(@NotNull T value);
+
+    // replica 为空表示持有者发布的是"没有值"
+    @Nullable
+    T fromReplica(byte @NotNull [] replica);
+
     // 用 Codec 编成 NBT 字节. 存储里没有值时读到 fallback, 映射键的条目没有 fallback
     record NbtForm<T>(@NotNull Codec<T> codec, @Nullable T fallback) implements ValueForm<T> {
 
@@ -34,6 +41,18 @@ public sealed interface ValueForm<T> {
         public T load(@Nullable StoredValue stored) {
             if (stored == null) return this.fallback;
             return NbtValues.decode(this.codec, ((StoredValue.OfBytes) stored).value());
+        }
+
+        @Override
+        public byte @NotNull [] replica(@NotNull T value) {
+            return NbtValues.encode(this.codec, value);
+        }
+
+        @Nullable
+        @Override
+        public T fromReplica(byte @NotNull [] replica) {
+            if (replica.length == 0) return this.fallback;
+            return NbtValues.decode(this.codec, replica);
         }
     }
 
@@ -53,6 +72,19 @@ public sealed interface ValueForm<T> {
             if (stored == null) return Optional.empty();
             return Optional.of(NbtValues.decode(this.codec, ((StoredValue.OfBytes) stored).value()));
         }
+
+        @Override
+        public byte @Nullable [] replica(@NotNull Optional<T> value) {
+            if (value.isEmpty()) return null;
+            return NbtValues.encode(this.codec, value.get());
+        }
+
+        @NotNull
+        @Override
+        public Optional<T> fromReplica(byte @NotNull [] replica) {
+            if (replica.length == 0) return Optional.empty();
+            return Optional.of(NbtValues.decode(this.codec, replica));
+        }
     }
 
     // memoryLong 键和计数键, 值直接以 long 存储
@@ -70,6 +102,17 @@ public sealed interface ValueForm<T> {
         public Long load(@Nullable StoredValue stored) {
             if (stored == null) return this.fallback;
             return ((StoredValue.OfLong) stored).value();
+        }
+
+        @Override
+        public byte @NotNull [] replica(@NotNull Long value) {
+            return NbtValues.encode(Codec.LONG, value);
+        }
+
+        @NotNull
+        @Override
+        public Long fromReplica(byte @NotNull [] replica) {
+            return NbtValues.decode(Codec.LONG, replica);
         }
     }
 }

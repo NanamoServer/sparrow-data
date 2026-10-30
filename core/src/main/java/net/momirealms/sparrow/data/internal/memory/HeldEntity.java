@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
 @ApiStatus.Internal
@@ -29,10 +28,11 @@ public final class HeldEntity<K> {
     private final Map<AbstractDataKey<K>, HeldValue<?>> values;
     private final Map<AbstractDataKey<K>, HeldEntries<?, ?>> entries;
 
-    private final AtomicReference<CompletableFuture<Void>> lastSave = new AtomicReference<>(CompletableFuture.completedFuture(null));
+    private final TaskChain saves = new TaskChain();
+    private final TaskChain publishes = new TaskChain();
     private boolean released;
 
-    // 一个实体在本服持有期间的全部内存键值, 用这个对象的锁把所有修改和落库取脏串起来. 读单个值和单个条目不加锁, 值都是不可变对象.
+    // 一个实体在本服持有期间的全部内存键值, 用这个对象的锁把所有修改, 落库取脏和 publish 取值串起来. 读单个值和单个条目不加锁, 值都是不可变对象.
     // 没有存储值的键, 有默认值的用默认值, 可选键用 Optional.empty()
     public HeldEntity(@NotNull EntityRef ref, @NotNull List<AbstractDataKey<K>> keys, @NotNull StoredEntity stored) {
         this.ref = ref;
@@ -125,19 +125,64 @@ public final class HeldEntity<K> {
         return new SaveBatch(writes, removes);
     }
 
-    // 接在上一次落库后面, 轮到时在 executor 上先取脏再交给存储. 取脏发生在上一次存储调用结束之后, 所以写进库的顺序就是取脏的顺序.
-    // 上一次落库失败不影响这一次, 它的异常已经交给了它自己的调用方
+    // 接在上一次落库后面, 轮到时在 executor 上先取脏再交给存储. 取脏发生在上一次存储调用结束之后, 所以写进库的顺序就是取脏的顺序
     @NotNull
     public CompletableFuture<Void> save(@NotNull EntityStorage storage, @NotNull Executor executor) {
-        CompletableFuture<Void> turn = new CompletableFuture<>();
-        CompletableFuture<Void> saved = turn.thenRunAsync(() -> this.saveDirty(storage), executor);
-        this.lastSave.getAndSet(saved).whenComplete((ignored, error) -> turn.complete(null));
-        return saved;
+        return this.saves.then(() -> CompletableFuture.runAsync(() -> this.saveDirty(storage), executor));
     }
 
-    // offline 时调用. 之后的修改都抛 IllegalStateException, 包括释放之前就拿到了这个容器的调用方; 释放之前的修改由随后的落库带走
-    public synchronized void release() {
+    // 排进 publish 链, 轮到时才取值, 上一次的副本写完才轮到下一次, 所以同一个键按调用顺序写进 Redis.
+    // 检查和排队在同一把锁里, 释放之后不会再有 publish 排到 offline 的最后一次 publish 后面
+    @NotNull
+    public synchronized CompletableFuture<Void> publish(@NotNull ReplicaPublisher publisher, @NotNull AbstractDataKey<K> key) {
+        this.requireHeld();
+        return this.publishes.then(() -> publisher.publish(this, key));
+    }
+
+    // saveAndPublish 用, 只 publish 本次持有期间 publish 过的键
+    @NotNull
+    public synchronized CompletableFuture<Void> publishAll(@NotNull ReplicaPublisher publisher) {
+        this.requireHeld();
+        return this.publishes.then(() -> publisher.publishAll(this));
+    }
+
+    // 在锁里取出要 publish 的这个键. 没有要写的时候两个列表都是空的
+    @NotNull
+    public synchronized Publications takePublication(@NotNull AbstractDataKey<K> key, long now, long refreshNanos) {
+        Publications publications = Publications.empty();
+        HeldValue<?> value = this.values.get(key);
+        if (value != null) {
+            publications.add(value.takePublication(now, refreshNanos));
+        } else {
+            publications.add(this.entries.get(key).takePublication(now, refreshNanos));
+        }
+        return publications;
+    }
+
+    // 在锁里取出本次持有期间 publish 过的键
+    @NotNull
+    public synchronized Publications takePublications(long now, long refreshNanos) {
+        Publications publications = Publications.empty();
+        for (HeldValue<?> slot : this.values.values()) {
+            if (slot.published()) publications.add(slot.takePublication(now, refreshNanos));
+        }
+        for (HeldEntries<?, ?> slot : this.entries.values()) {
+            if (slot.published()) publications.add(slot.takePublication(now, refreshNanos));
+        }
+        return publications;
+    }
+
+    // offline 时调用. 之后的修改和 publish 都抛 IllegalStateException, 包括释放之前就拿到了这个容器的调用方.
+    // 同时把最后一次 publish 排进链里, 返回的 future 在它写完副本后结束; 释放之前的修改由随后的落库带走
+    @NotNull
+    public synchronized CompletableFuture<Void> release(@NotNull ReplicaPublisher publisher) {
         this.released = true;
+        return this.publishes.then(() -> publisher.publishAll(this));
+    }
+
+    @NotNull
+    public EntityRef ref() {
+        return this.ref;
     }
 
     private void saveDirty(@NotNull EntityStorage storage) {
@@ -174,5 +219,26 @@ public final class HeldEntity<K> {
         Map<String, V> entries = HashMap.newHashMap(stored.size());
         stored.forEach((entry, value) -> entries.put(entry, form.load(value)));
         return new HeldEntries<>(key.storageKey(), key.entryCodec(), form, entries);
+    }
+
+    // 一次 publish 要写的普通键和映射键, 在锁里取出, 编码和发送在锁外
+    public record Publications(@NotNull List<HeldValue.Publication<?>> values, @NotNull List<HeldEntries.Publication<?>> entries) {
+
+        @NotNull
+        static Publications empty() {
+            return new Publications(new ArrayList<>(), new ArrayList<>());
+        }
+
+        void add(@Nullable HeldValue.Publication<?> value) {
+            if (value != null) {
+                this.values.add(value);
+            }
+        }
+
+        void add(@Nullable HeldEntries.Publication<?> entries) {
+            if (entries != null) {
+                this.entries.add(entries);
+            }
+        }
     }
 }

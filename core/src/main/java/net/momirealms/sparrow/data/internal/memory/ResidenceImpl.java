@@ -37,7 +37,8 @@ public final class ResidenceImpl<K> implements Residence<K> {
         return this.enqueue(id, () -> this.load(id, ref));
     }
 
-    // 先释放, 之后的修改都会抛异常; 再把释放之前的修改落库, 这次落库排在已经在途的落库后面
+    // 先释放, 之后的修改和 publish 都会抛异常; 再把释放之前的修改落库, 并 publish 本次持有期间 publish 过的键.
+    // 两者都排在已经在途的落库和 publish 后面, future 在都完成后结束, 下一个持有者 online 时不会再有这台服写的副本到达
     @NotNull
     @Override
     public CompletableFuture<Void> offline(@NotNull K id) {
@@ -61,9 +62,10 @@ public final class ResidenceImpl<K> implements Residence<K> {
         HeldEntity<K> held = this.type.removeHeld(id);
         // online 失败时没有容器, 不用做什么
         if (held == null) return CompletableFuture.completedFuture(null);
-        held.release();
+        CompletableFuture<Void> published = held.release(this.service.publisher());
         this.service.autoSaver().stop(held);
-        return held.save(this.service.storage(), this.service.executor());
+        CompletableFuture<Void> saved = held.save(this.service.storage(), this.service.executor());
+        return CompletableFuture.allOf(published, saved);
     }
 
     // 上一个持有者宕机时, 副本里可能是从没落库的值, 和刚读出的 checkpoint 对不上. 删掉之后观察方会改读存储.

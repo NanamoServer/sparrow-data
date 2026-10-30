@@ -18,7 +18,11 @@ public final class HeldValue<T> {
     private volatile T value;
     private boolean dirty;
 
-    // 普通内存键在持有容器里的槽. 修改和取脏要在 HeldEntity 的锁里调用, 读值不加锁
+    private boolean published;            // 本次持有期间 publish 过
+    private boolean changedSincePublish;
+    private long publishedAt;             // 上次 publish 取值时的 System.nanoTime()
+
+    // 普通内存键在持有容器里的槽. 修改, 取脏和取 publish 的值要在 HeldEntity 的锁里调用, 读值不加锁
     public HeldValue(@NotNull StorageKey key, @NotNull ValueForm<T> form, @NotNull T value) {
         this.key = key;
         this.form = form;
@@ -33,6 +37,7 @@ public final class HeldValue<T> {
     public void set(@NotNull T value) {
         this.value = value;
         this.dirty = true;
+        this.changedSincePublish = true;
     }
 
     // 清掉脏标记, 带走这一刻的值. 之后的写入会重新标脏, 下一次落库再写
@@ -41,6 +46,21 @@ public final class HeldValue<T> {
         if (!this.dirty) return null;
         this.dirty = false;
         return new Dirty<>(this.key, this.form, this.value);
+    }
+
+    public boolean published() {
+        return this.published;
+    }
+
+    // 第一次 publish, 上次 publish 之后改过, 或者距上次 publish 超过 refreshNanos(副本可能快过期了)时, 带走这一刻的值;
+    // 其他情况副本里已经是当前值, 返回 null
+    @Nullable
+    public Publication<T> takePublication(long now, long refreshNanos) {
+        if (this.published && !this.changedSincePublish && now - this.publishedAt <= refreshNanos) return null;
+        this.published = true;
+        this.changedSincePublish = false;
+        this.publishedAt = now;
+        return new Publication<>(this.key, this.form, this.value);
     }
 
     public record Dirty<T>(@NotNull StorageKey key, @NotNull ValueForm<T> form, @NotNull T value) {
@@ -54,5 +74,8 @@ public final class HeldValue<T> {
                 writes.add(new SaveBatch.Write(this.key, null, stored));
             }
         }
+    }
+
+    public record Publication<T>(@NotNull StorageKey key, @NotNull ValueForm<T> form, @NotNull T value) {
     }
 }

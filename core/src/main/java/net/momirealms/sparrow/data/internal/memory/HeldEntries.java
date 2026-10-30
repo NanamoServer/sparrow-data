@@ -28,8 +28,14 @@ public final class HeldEntries<E, V> {
     private final Set<String> dirty = new HashSet<>();
     private final Set<String> removed = new HashSet<>();
 
-    // 映射内存键在持有容器里的槽, 条目按编码后的条目键存放. 修改和取脏要在 HeldEntity 的锁里调用, 读单个条目不加锁.
-    // 同一个条目只会在 dirty 和 removed 其中之一里, 记的是它最后一次操作的结果
+    private boolean published;                                        // 本次持有期间 publish 过
+    private final Set<String> changedSincePublish = new HashSet<>();  // 第一次 publish 之后才开始记
+    private final Set<String> removedSincePublish = new HashSet<>();
+    private long publishedAt;                                         // 上次 publish 取值时的 System.nanoTime()
+
+    // 映射内存键在持有容器里的槽, 条目按编码后的条目键存放. 修改, 取脏和取 publish 的条目要在 HeldEntity 的锁里调用, 读单个条目不加锁.
+    // 落库和 publish 各记各的. 同一个条目只会在 dirty 和 removed 其中之一里, 也只会在 changedSincePublish 和 removedSincePublish 其中之一里,
+    // 记的都是它最后一次操作的结果
     public HeldEntries(@NotNull StorageKey key, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueForm<V> form, @NotNull Map<String, V> entries) {
         this.key = key;
         this.entryCodec = entryCodec;
@@ -54,6 +60,10 @@ public final class HeldEntries<E, V> {
         this.entries.put(entry, value);
         this.removed.remove(entry);
         this.dirty.add(entry);
+        if (this.published) {
+            this.removedSincePublish.remove(entry);
+            this.changedSincePublish.add(entry);
+        }
     }
 
     // 条目不存在时什么都不用记, 它要么不在存储里, 要么已经记在 removed 里
@@ -61,6 +71,10 @@ public final class HeldEntries<E, V> {
         if (this.entries.remove(entry) == null) return;
         this.dirty.remove(entry);
         this.removed.add(entry);
+        if (this.published) {
+            this.changedSincePublish.remove(entry);
+            this.removedSincePublish.add(entry);
+        }
     }
 
     // operator 返回 null 表示删除这个条目
@@ -89,6 +103,33 @@ public final class HeldEntries<E, V> {
         return new Dirty<>(this.key, this.form, written, removed);
     }
 
+    public boolean published() {
+        return this.published;
+    }
+
+    // 第一次 publish 时副本里还没有这个键, 距上次 publish 超过 refreshNanos 时副本可能快过期了, 这两种情况带走全部条目,
+    // 只写改过的条目会让 Hash 里缺了没改过的那些. 其他时候只带走上次 publish 之后改过的条目. 两种情况都带上这期间删掉的条目
+    @Nullable
+    public Publication<V> takePublication(long now, long refreshNanos) {
+        boolean full = !this.published || now - this.publishedAt > refreshNanos;
+        if (!full && this.changedSincePublish.isEmpty() && this.removedSincePublish.isEmpty()) return null;
+        Map<String, V> written;
+        if (full) {
+            written = new HashMap<>(this.entries);
+        } else {
+            written = HashMap.newHashMap(this.changedSincePublish.size());
+            for (String entry : this.changedSincePublish) {
+                written.put(entry, this.entries.get(entry));
+            }
+        }
+        List<String> removed = new ArrayList<>(this.removedSincePublish);
+        this.changedSincePublish.clear();
+        this.removedSincePublish.clear();
+        this.published = true;
+        this.publishedAt = now;
+        return new Publication<>(this.key, this.form, full, written, removed);
+    }
+
     public record Dirty<V>(@NotNull StorageKey key, @NotNull ValueForm<V> form, @NotNull Map<String, V> written, @NotNull List<String> removed) {
 
         // 在锁外编码
@@ -99,5 +140,9 @@ public final class HeldEntries<E, V> {
                 removes.add(new SaveBatch.Remove(this.key, this.removed.get(i)));
             }
         }
+    }
+
+    // full 为 true 时 written 是全部条目
+    public record Publication<V>(@NotNull StorageKey key, @NotNull ValueForm<V> form, boolean full, @NotNull Map<String, V> written, @NotNull List<String> removed) {
     }
 }
