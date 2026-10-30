@@ -41,6 +41,16 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
     }
 
     @NotNull
+    String insertData() {
+        return "INSERT IGNORE INTO " + this.data + " (entity_id, path, val) VALUES (?, ?, ?)";
+    }
+
+    @NotNull
+    String addData() {
+        return "INSERT INTO " + this.data + " (entity_id, path, num) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE num = num + VALUES(num) RETURNING num";
+    }
+
+    @NotNull
     String selectRows() {
         return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ?";
     }
@@ -51,8 +61,23 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
     }
 
     @NotNull
+    String lockRow() {
+        return "SELECT num, val FROM " + this.data + " WHERE entity_id = ? AND path = ? FOR UPDATE";
+    }
+
+    @NotNull
     String selectEntries() {
         return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ? AND path >= ? AND path < ?";
+    }
+
+    @NotNull
+    String compareAndSetData() {
+        return "UPDATE " + this.data + " SET val = ? WHERE entity_id = ? AND path = ? AND val = ?";
+    }
+
+    @NotNull
+    String updateDataNum() {
+        return "UPDATE " + this.data + " SET num = ? WHERE entity_id = ? AND path = ?";
     }
 
     @NotNull
@@ -72,7 +97,12 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
 
     @NotNull
     String upsertRanked() {
-        return "INSERT INTO " + this.ranked + " (data_key, entity_id, num) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num)";
+        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num)";
+    }
+
+    @NotNull
+    String addRanked() {
+        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE num = num + VALUES(num) RETURNING num";
     }
 
     @NotNull
@@ -83,6 +113,27 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
     @NotNull
     String selectRanked() {
         return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ?";
+    }
+
+    @NotNull
+    String lockRanked() {
+        return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ? FOR UPDATE";
+    }
+
+    @NotNull
+    String updateRankedNum() {
+        return "UPDATE " + this.ranked + " SET num = ? WHERE entity_id = ? AND data_key = ?";
+    }
+
+    // 索引是 (data_key, num, entity_id) 升序, 两列都按降序排时可以反向扫描索引, 不需要额外排序
+    @NotNull
+    String top() {
+        return "SELECT entity_id, num FROM " + this.ranked + " WHERE data_key = ? ORDER BY num DESC, entity_id DESC LIMIT ? OFFSET ?";
+    }
+
+    @NotNull
+    String countAbove() {
+        return "SELECT COUNT(*) FROM " + this.ranked + " WHERE data_key = ? AND num > ?";
     }
 
     @NotNull

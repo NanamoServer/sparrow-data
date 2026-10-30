@@ -41,6 +41,21 @@ record PostgresTables(@NotNull String data, @NotNull String ranked, @NotNull Str
     }
 
     @NotNull
+    String insertData() {
+        return "INSERT INTO " + this.data + " (entity_id, path, val) VALUES (?, ?, ?) ON CONFLICT (entity_id, path) DO NOTHING";
+    }
+
+    @NotNull
+    String addData() {
+        return "INSERT INTO " + this.data + " (entity_id, path, num) VALUES (?, ?, ?) ON CONFLICT (entity_id, path) DO UPDATE SET num = " + this.data + ".num + EXCLUDED.num RETURNING num";
+    }
+
+    @NotNull
+    String takeData() {
+        return "UPDATE " + this.data + " SET num = num - ? WHERE entity_id = ? AND path = ? AND num >= ? RETURNING num";
+    }
+
+    @NotNull
     String selectRows() {
         return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ?";
     }
@@ -51,8 +66,18 @@ record PostgresTables(@NotNull String data, @NotNull String ranked, @NotNull Str
     }
 
     @NotNull
+    String lockRow() {
+        return "SELECT num, val FROM " + this.data + " WHERE entity_id = ? AND path = ? FOR UPDATE";
+    }
+
+    @NotNull
     String selectEntries() {
         return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ? AND path >= ? AND path < ?";
+    }
+
+    @NotNull
+    String compareAndSetData() {
+        return "UPDATE " + this.data + " SET val = ? WHERE entity_id = ? AND path = ? AND val = ?";
     }
 
     @NotNull
@@ -73,7 +98,17 @@ record PostgresTables(@NotNull String data, @NotNull String ranked, @NotNull Str
 
     @NotNull
     String upsertRanked() {
-        return "INSERT INTO " + this.ranked + " (data_key, entity_id, num) VALUES (?, ?, ?) ON CONFLICT (entity_id, data_key) DO UPDATE SET num = EXCLUDED.num";
+        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num) VALUES (?, ?, ?) ON CONFLICT (entity_id, data_key) DO UPDATE SET num = EXCLUDED.num";
+    }
+
+    @NotNull
+    String addRanked() {
+        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num) VALUES (?, ?, ?) ON CONFLICT (entity_id, data_key) DO UPDATE SET num = " + this.ranked + ".num + EXCLUDED.num RETURNING num";
+    }
+
+    @NotNull
+    String takeRanked() {
+        return "UPDATE " + this.ranked + " SET num = num - ? WHERE entity_id = ? AND data_key = ? AND num >= ? RETURNING num";
     }
 
     @NotNull
@@ -84,6 +119,22 @@ record PostgresTables(@NotNull String data, @NotNull String ranked, @NotNull Str
     @NotNull
     String selectRanked() {
         return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ?";
+    }
+
+    @NotNull
+    String lockRanked() {
+        return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ? FOR UPDATE";
+    }
+
+    // 索引是 (data_key, num, entity_id) 升序, 两列都按降序排时可以反向扫描索引, 不需要额外排序
+    @NotNull
+    String top() {
+        return "SELECT entity_id, num FROM " + this.ranked + " WHERE data_key = ? ORDER BY num DESC, entity_id DESC LIMIT ? OFFSET ?";
+    }
+
+    @NotNull
+    String countAbove() {
+        return "SELECT COUNT(*) FROM " + this.ranked + " WHERE data_key = ? AND num > ?";
     }
 
     @NotNull
