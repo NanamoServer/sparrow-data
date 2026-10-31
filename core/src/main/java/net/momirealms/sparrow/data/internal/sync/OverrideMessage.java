@@ -38,7 +38,7 @@ public final class OverrideMessage<B extends ByteBuf> extends OneWayMessage<B> {
         this.entityId = ByteBufHelper.readByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
         this.keyId = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.entry = ByteBufUtils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.value = ValueCodec.read(buf);
+        this.value = StoredValueCodec.read(buf);
     }
 
     @Override
@@ -48,7 +48,7 @@ public final class OverrideMessage<B extends ByteBuf> extends OneWayMessage<B> {
         ByteBufHelper.writeByteArray(buf, this.entityId);
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
         ByteBufUtils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
-        ValueCodec.write(buf, this.value);
+        StoredValueCodec.write(buf, this.value);
     }
 
     @Override

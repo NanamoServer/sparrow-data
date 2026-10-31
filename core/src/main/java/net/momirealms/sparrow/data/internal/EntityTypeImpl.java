@@ -1,6 +1,5 @@
 package net.momirealms.sparrow.data.internal;
 
-import com.mojang.serialization.Codec;
 import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.entity.Entity;
@@ -29,6 +28,7 @@ import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.SortableKey;
+import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbMapCounterKeyBuilder;
@@ -100,14 +100,14 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
-    public <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue) {
-        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.NbtForm<>(codec, defaultValue));
+    public <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue) {
+        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.CodecForm<>(codec, defaultValue));
     }
 
     @NotNull
     @Override
-    public <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull Codec<T> codec) {
-        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.OptionalNbtForm<>(codec));
+    public <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull ValueCodec<T> codec) {
+        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.OptionalCodecForm<>(codec));
     }
 
     @NotNull
@@ -119,20 +119,20 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     // 映射键的条目没有默认值, 条目不存在时读到 null
     @NotNull
     @Override
-    public <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec) {
-        return new MemoryMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.NbtForm<>(valueCodec, null));
+    public <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec) {
+        return new MemoryMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.CodecForm<>(valueCodec, null));
     }
 
     @NotNull
     @Override
-    public <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue) {
-        return new DbKeyBuilderImpl<>(this, id, new ValueForm.NbtForm<>(codec, defaultValue));
+    public <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue) {
+        return new DbKeyBuilderImpl<>(this, id, new ValueForm.CodecForm<>(codec, defaultValue));
     }
 
     @NotNull
     @Override
-    public <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull Codec<T> codec) {
-        return new DbKeyBuilderImpl<>(this, id, new ValueForm.OptionalNbtForm<>(codec));
+    public <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull ValueCodec<T> codec) {
+        return new DbKeyBuilderImpl<>(this, id, new ValueForm.OptionalCodecForm<>(codec));
     }
 
     @NotNull
@@ -143,8 +143,8 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
-    public <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec) {
-        return new DbMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.NbtForm<>(valueCodec, null));
+    public <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec) {
+        return new DbMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.CodecForm<>(valueCodec, null));
     }
 
     @NotNull

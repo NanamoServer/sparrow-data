@@ -1,11 +1,11 @@
 package net.momirealms.sparrow.data.entity;
 
-import com.mojang.serialization.Codec;
 import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
 import net.momirealms.sparrow.data.key.SortableKey;
+import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbMapCounterKeyBuilder;
@@ -31,28 +31,28 @@ public interface EntityType<K> {
     Residence<K> residence();
 
     @NotNull
-    <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue);
+    <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue);
 
     @NotNull
-    <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull Codec<T> codec);
+    <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull ValueCodec<T> codec);
 
     @NotNull
     MemoryLongKeyBuilder<K> memoryLong(@NotNull Key id);
 
     @NotNull
-    <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec);
+    <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec);
 
     @NotNull
-    <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull Codec<T> codec, @NotNull T defaultValue);
+    <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue);
 
     @NotNull
-    <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull Codec<T> codec);
+    <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull ValueCodec<T> codec);
 
     @NotNull
     DbCounterKeyBuilder<K> dbCounter(@NotNull Key id);
 
     @NotNull
-    <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull Codec<V> valueCodec);
+    <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec);
 
     @NotNull
     <E> DbMapCounterKeyBuilder<K, E> dbMapCounter(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec);

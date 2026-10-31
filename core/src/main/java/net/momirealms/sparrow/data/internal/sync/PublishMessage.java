@@ -51,12 +51,12 @@ public final class PublishMessage<B extends ByteBuf> extends OneWayMessage<B> {
             int size = ByteBufHelper.readCompactInt(buf);
             Map<String, StoredValue> entries = HashMap.newHashMap(size);
             for (int i = 0; i < size; i++) {
-                entries.put(ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH), ValueCodec.read(buf));
+                entries.put(ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH), StoredValueCodec.read(buf));
             }
             this.value = null;
             this.entries = entries;
         } else {
-            this.value = ValueCodec.read(buf);
+            this.value = StoredValueCodec.read(buf);
             this.entries = null;
         }
     }
@@ -70,13 +70,13 @@ public final class PublishMessage<B extends ByteBuf> extends OneWayMessage<B> {
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
         buf.writeBoolean(this.entries != null);
         if (this.entries == null) {
-            ValueCodec.write(buf, this.value);
+            StoredValueCodec.write(buf, this.value);
             return;
         }
         ByteBufHelper.writeCompactInt(buf, this.entries.size());
         this.entries.forEach((entry, value) -> {
             ByteBufHelper.writeUtf8(buf, entry, DataMessenger.MAX_TEXT_LENGTH);
-            ValueCodec.write(buf, value);
+            StoredValueCodec.write(buf, value);
         });
     }
 

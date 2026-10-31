@@ -8,12 +8,12 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 @ApiStatus.Internal
-final class ValueCodec {
+final class StoredValueCodec {
     private static final byte NO_VALUE = 0;
     private static final byte LONG_VALUE = 1;
     private static final byte BYTES_VALUE = 2;
 
-    private ValueCodec() {
+    private StoredValueCodec() {
     }
 
     // 覆盖和 publish 消息里的值. 先写一个字节表示形态, 再写内容, null 表示没有值

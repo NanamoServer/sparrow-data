@@ -1,7 +1,6 @@
 package net.momirealms.sparrow.data.internal.key;
 
-import com.mojang.serialization.Codec;
-import net.momirealms.sparrow.data.internal.codec.NbtValues;
+import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.storage.StoredValue;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -20,38 +19,38 @@ public sealed interface ValueForm<T> {
     @Nullable
     T load(@Nullable StoredValue stored);
 
-    // 用 Codec 编成 NBT 字节. 存储里没有值时读到 fallback, 映射键的条目没有 fallback
-    record NbtForm<T>(@NotNull Codec<T> codec, @Nullable T fallback) implements ValueForm<T> {
+    // 用 ValueCodec 编成字节. 存储里没有值时读到 fallback, 映射键的条目没有 fallback
+    record CodecForm<T>(@NotNull ValueCodec<T> codec, @Nullable T fallback) implements ValueForm<T> {
 
         @NotNull
         @Override
         public StoredValue store(@NotNull T value) {
-            return new StoredValue.OfBytes(NbtValues.encode(this.codec, value));
+            return new StoredValue.OfBytes(this.codec.encode(value));
         }
 
         @Nullable
         @Override
         public T load(@Nullable StoredValue stored) {
             if (stored == null) return this.fallback;
-            return NbtValues.decode(this.codec, ((StoredValue.OfBytes) stored).value());
+            return this.codec.decode(((StoredValue.OfBytes) stored).value());
         }
     }
 
     // 不设默认值的键. 存储里只放 Optional 里面的值, Optional.empty() 对应存储里没有值
-    record OptionalNbtForm<T>(@NotNull Codec<T> codec) implements ValueForm<Optional<T>> {
+    record OptionalCodecForm<T>(@NotNull ValueCodec<T> codec) implements ValueForm<Optional<T>> {
 
         @Nullable
         @Override
         public StoredValue store(@NotNull Optional<T> value) {
             if (value.isEmpty()) return null;
-            return new StoredValue.OfBytes(NbtValues.encode(this.codec, value.get()));
+            return new StoredValue.OfBytes(this.codec.encode(value.get()));
         }
 
         @NotNull
         @Override
         public Optional<T> load(@Nullable StoredValue stored) {
             if (stored == null) return Optional.empty();
-            return Optional.of(NbtValues.decode(this.codec, ((StoredValue.OfBytes) stored).value()));
+            return Optional.of(this.codec.decode(((StoredValue.OfBytes) stored).value()));
         }
     }
 

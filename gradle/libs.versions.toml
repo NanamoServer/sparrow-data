@@ -3,7 +3,6 @@
 project-version = "0.0.1"
 
 # Platform
-datafixerupper = "8.0.16"
 jetbrains-annotations = "26.0.2-1"
 
 # Common
@@ -11,7 +10,6 @@ caffeine = "3.2.3"
 slf4j = "2.0.17"
 
 # Sparrow
-sparrow-nbt = "0.24"
 sparrow-redis-message-broker = "0.0.7"
 
 # Storage
@@ -19,7 +17,6 @@ netty = "4.2.7.Final"
 
 [libraries]
 # Platform
-datafixerupper = { module = "com.mojang:datafixerupper", version.ref = "datafixerupper" }
 jetbrains-annotations = { module = "org.jetbrains:annotations", version.ref = "jetbrains-annotations" }
 
 # Common
@@ -27,16 +24,7 @@ caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "c
 slf4j = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 
 # Sparrow
-sparrow-nbt = { module = "net.momirealms:sparrow-nbt", version.ref = "sparrow-nbt" }
-sparrow-nbt-codec = { module = "net.momirealms:sparrow-nbt-codec", version.ref = "sparrow-nbt" }
 sparrow-redis-message-broker = { module = "net.momirealms:sparrow-redis-message-broker", version.ref = "sparrow-redis-message-broker" }
 
 # Storage
 netty-buffer = { module = "io.netty:netty-buffer", version.ref = "netty" }
-
-[bundles]
-# Sparrow NBT
-sparrow-nbt = [
-    "sparrow-nbt",
-    "sparrow-nbt-codec"
-]
