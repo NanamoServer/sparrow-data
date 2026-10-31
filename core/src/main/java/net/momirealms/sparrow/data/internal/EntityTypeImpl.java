@@ -73,7 +73,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         this.service = service;
         this.name = name;
         this.idCodec = idCodec;
-        this.snapshots = new SnapshotCache<>(service.snapshotExpiry(), service.logger());
+        this.snapshots = new SnapshotCache<>(service.snapshotExpiry());
         this.db = new DbOperations<>(this, service.storage(), service.executor(), service.messenger());
         this.residence = new ResidenceImpl<>(this, service);
         this.overrides = new OverrideService<>(this, service);

@@ -3,7 +3,6 @@ package net.momirealms.sparrow.data;
 import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.data.internal.DataServiceImpl;
 import net.momirealms.sparrow.data.storage.EntityStorage;
-import net.momirealms.sparrow.redis.messagebroker.Logger;
 import net.momirealms.sparrow.redis.messagebroker.MessageBroker;
 import org.jetbrains.annotations.NotNull;
 
@@ -12,12 +11,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 
-public final class SparrowData {
+public final class SparrowDataService {
 
-    private SparrowData() {
+    private SparrowDataService() {
     }
 
-    // 数据层的入口. 宿主传入的存储, 线程, broker 和 logger 都由宿主创建, 也由宿主在 DataService.close() 之后关闭
+    // 数据层的入口. 宿主传入的存储, 线程和 broker 都由宿主创建, 也由宿主在 DataService.close() 之后关闭
     @NotNull
     public static Builder builder() {
         return new Builder();
@@ -29,7 +28,6 @@ public final class SparrowData {
         private EntityStorage storage;
         private Executor executor;
         private MessageBroker<? extends ByteBuf> messageBroker;
-        private Logger logger;
         private Duration saveInterval;
         private Duration snapshotExpiry = DEFAULT_SNAPSHOT_EXPIRY;
 
@@ -55,12 +53,6 @@ public final class SparrowData {
             return this;
         }
 
-        @NotNull
-        public Builder logger(@NotNull Logger logger) {
-            this.logger = logger;
-            return this;
-        }
-
         // 每个持有中的实体从 online 开始, 每隔这么久落库一次
         @NotNull
         public Builder saveInterval(@NotNull Duration saveInterval) {
@@ -83,14 +75,12 @@ public final class SparrowData {
             if (this.storage == null) missing.add("storage");
             if (this.executor == null) missing.add("executor");
             if (this.messageBroker == null) missing.add("messageBroker");
-            if (this.logger == null) missing.add("logger");
             if (this.saveInterval == null) missing.add("saveInterval");
             if (!missing.isEmpty()) throw new IllegalStateException("Missing required settings: " + String.join(", ", missing));
             return new DataServiceImpl(
                     this.storage,
                     this.executor,
                     this.messageBroker,
-                    this.logger,
                     this.saveInterval,
                     this.snapshotExpiry
             );

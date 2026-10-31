@@ -2,7 +2,6 @@ package net.momirealms.sparrow.data.internal.snapshot;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import net.momirealms.sparrow.redis.messagebroker.Logger;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -18,13 +17,11 @@ public final class SnapshotCache<K> {
     private static final Slot WHOLE = new Slot(null);
 
     private final Cache<Node<K>, Map<Slot, SingleFlightLoader<?>>> nodes;
-    private final Logger logger;
 
     // 一个实体类型的快照. 一个实体的一个键是一个节点, 节点里有整个值(普通键的值, 或映射键的全部条目)和各个条目的快照,
     // 节点按最近一次 peek 计时过期. 失效和本服写入用 getIfPresentQuietly 查找, 不算访问, 没人看的快照照样会过期
-    public SnapshotCache(@NotNull Duration expireAfterAccess, @NotNull Logger logger) {
+    public SnapshotCache(@NotNull Duration expireAfterAccess) {
         this.nodes = Caffeine.newBuilder().expireAfterAccess(expireAfterAccess).build();
-        this.logger = logger;
     }
 
     // 普通键的值, 或映射键的全部条目
@@ -102,7 +99,7 @@ public final class SnapshotCache<K> {
     @NotNull
     private <V> SingleFlightLoader<V> flight(@NotNull K id, @NotNull String keyId, @NotNull Slot slot, @NotNull Supplier<CompletableFuture<V>> loader) {
         Map<Slot, SingleFlightLoader<?>> flights = this.nodes.get(new Node<>(id, keyId), node -> new ConcurrentHashMap<>());
-        return (SingleFlightLoader<V>) flights.computeIfAbsent(slot, created -> new SingleFlightLoader<>(loader, this.logger, describe(id, keyId, created)));
+        return (SingleFlightLoader<V>) flights.computeIfAbsent(slot, created -> new SingleFlightLoader<>(loader, describe(id, keyId, created)));
     }
 
     private static void invalidateIfPresent(@Nullable SingleFlightLoader<?> flight) {

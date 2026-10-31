@@ -1,17 +1,19 @@
 package net.momirealms.sparrow.data.internal.snapshot;
 
-import net.momirealms.sparrow.redis.messagebroker.Logger;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 @ApiStatus.Internal
 public final class SingleFlightLoader<V> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(SingleFlightLoader.class);
+
     private final Supplier<CompletableFuture<V>> loader;
-    private final Logger logger;
     private final String name;
 
     private @Nullable V value;
@@ -22,9 +24,8 @@ public final class SingleFlightLoader<V> {
 
     // 一个快照对象的值和它的读取状态.
     // loader 不抛异常, 失败通过返回的 future 表达; 它只发起读取, 不在调用线程上等结果
-    SingleFlightLoader(@NotNull Supplier<CompletableFuture<V>> loader, @NotNull Logger logger, @NotNull String name) {
+    SingleFlightLoader(@NotNull Supplier<CompletableFuture<V>> loader, @NotNull String name) {
         this.loader = loader;
-        this.logger = logger;
         this.name = name;
     }
 
@@ -103,7 +104,7 @@ public final class SingleFlightLoader<V> {
             }
         }
         if (error != null) {
-            this.logger.error("Failed to load snapshot " + this.name, error);
+            LOGGER.error("Failed to load snapshot {}", this.name, error);
         }
         if (again) {
             this.load();

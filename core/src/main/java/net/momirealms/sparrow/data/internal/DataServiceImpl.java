@@ -8,7 +8,6 @@ import net.momirealms.sparrow.data.entity.EntityType;
 import net.momirealms.sparrow.data.internal.db.TransactionImpl;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.storage.EntityStorage;
-import net.momirealms.sparrow.redis.messagebroker.Logger;
 import net.momirealms.sparrow.redis.messagebroker.MessageBroker;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -30,7 +29,6 @@ public final class DataServiceImpl implements DataService {
     private final EntityStorage storage;
     private final Executor executor;
     private final DataMessenger<?> messenger;
-    private final Logger logger;
     private final Duration saveInterval;
     private final Duration snapshotExpiry;
 
@@ -42,14 +40,12 @@ public final class DataServiceImpl implements DataService {
             @NotNull EntityStorage storage,
             @NotNull Executor executor,
             @NotNull MessageBroker<? extends ByteBuf> broker,
-            @NotNull Logger logger,
             @NotNull Duration saveInterval,
             @NotNull Duration snapshotExpiry
     ) {
         this.storage = storage;
         this.executor = executor;
         this.messenger = DataMessenger.register(broker);
-        this.logger = logger;
         this.saveInterval = saveInterval;
         this.snapshotExpiry = snapshotExpiry;
     }
@@ -102,11 +98,6 @@ public final class DataServiceImpl implements DataService {
     @NotNull
     public DataMessenger<?> messenger() {
         return this.messenger;
-    }
-
-    @NotNull
-    public Logger logger() {
-        return this.logger;
     }
 
     @NotNull

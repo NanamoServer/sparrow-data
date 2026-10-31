@@ -12,6 +12,8 @@ import net.momirealms.sparrow.data.storage.StoredValue;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -28,6 +30,8 @@ import java.util.function.UnaryOperator;
 
 @ApiStatus.Internal
 public final class HeldEntity<K> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(HeldEntity.class);
+
     private final K id;
     private final EntityRef ref;
     private final DataServiceImpl service;
@@ -239,7 +243,7 @@ public final class HeldEntity<K> {
         if (this.released) return;
         this.save().whenComplete((ignored, error) -> {
             if (error != null) {
-                this.service.logger().error("Failed to auto save " + this.ref.entityType() + " " + this.id, error);
+                LOGGER.error("Failed to auto save {} {}", this.ref.entityType(), this.id, error);
             }
         });
         this.startAutoSave();
