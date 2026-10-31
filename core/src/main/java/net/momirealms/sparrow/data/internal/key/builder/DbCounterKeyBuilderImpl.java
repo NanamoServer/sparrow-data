@@ -13,6 +13,7 @@ import org.jetbrains.annotations.NotNull;
 public final class DbCounterKeyBuilderImpl<K> implements DbCounterKeyBuilder<K> {
     private final EntityTypeImpl<K> type;
     private final Key id;
+    private int scale;
 
     public DbCounterKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id) {
         this.type = type;
@@ -21,14 +22,21 @@ public final class DbCounterKeyBuilderImpl<K> implements DbCounterKeyBuilder<K> 
 
     @NotNull
     @Override
+    public DbCounterKeyBuilder<K> scale(int scale) {
+        this.scale = ScaleRange.require(scale);
+        return this;
+    }
+
+    @NotNull
+    @Override
     public SortableDbCounterKeyBuilder<K> sortable() {
-        return new SortableDbCounterKeyBuilderImpl<>(this.type, this.id);
+        return new SortableDbCounterKeyBuilderImpl<>(this.type, this.id, this.scale);
     }
 
     @NotNull
     @Override
     public DbCounterKey<K> register() {
-        DbCounterKeyImpl<K> key = new DbCounterKeyImpl<>(this.id, this.type);
+        DbCounterKeyImpl<K> key = new DbCounterKeyImpl<>(this.id, this.type, this.scale);
         this.type.keys().register(key);
         return key;
     }

@@ -7,5 +7,8 @@ import org.jetbrains.annotations.NotNull;
 public interface SortableDbCounterKeyBuilder<K> {
 
     @NotNull
+    SortableDbCounterKeyBuilder<K> scale(int scale);
+
+    @NotNull
     SortableDbCounterKey<K> register();
 }

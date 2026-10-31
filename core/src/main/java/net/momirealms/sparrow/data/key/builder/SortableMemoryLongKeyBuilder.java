@@ -12,5 +12,8 @@ public interface SortableMemoryLongKeyBuilder<K> {
     SortableMemoryLongKeyBuilder<K> defaultValue(long value);
 
     @NotNull
+    SortableMemoryLongKeyBuilder<K> scale(int scale);
+
+    @NotNull
     CompletableFuture<SortableMemoryKey<K>> register();
 }

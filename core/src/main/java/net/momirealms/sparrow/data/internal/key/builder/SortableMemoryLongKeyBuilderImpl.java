@@ -16,11 +16,13 @@ public final class SortableMemoryLongKeyBuilderImpl<K> implements SortableMemory
     private final EntityTypeImpl<K> type;
     private final Key id;
     private long defaultValue;
+    private int scale;
 
-    public SortableMemoryLongKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id, long defaultValue) {
+    public SortableMemoryLongKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id, long defaultValue, int scale) {
         this.type = type;
         this.id = id;
         this.defaultValue = defaultValue;
+        this.scale = scale;
     }
 
     @NotNull
@@ -32,8 +34,15 @@ public final class SortableMemoryLongKeyBuilderImpl<K> implements SortableMemory
 
     @NotNull
     @Override
+    public SortableMemoryLongKeyBuilder<K> scale(int scale) {
+        this.scale = ScaleRange.require(scale);
+        return this;
+    }
+
+    @NotNull
+    @Override
     public CompletableFuture<SortableMemoryKey<K>> register() {
-        SortableMemoryKeyImpl<K> key = new SortableMemoryKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue));
-        return this.type.backfill().register(key).<SortableMemoryKey<K>>thenApply(ignored -> key);
+        SortableMemoryKeyImpl<K> key = new SortableMemoryKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue), this.scale);
+        return this.type.backfill().register(key).thenApply(ignored -> key);
     }
 }

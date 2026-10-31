@@ -8,14 +8,21 @@ import org.jetbrains.annotations.NotNull;
 
 @ApiStatus.Internal
 public final class DbCounterKeyImpl<K> extends AbstractDataKey<K> implements DbCounterKey<K>, ValueKeyImpl<K, Long> {
+    private final int scale;
 
-    public DbCounterKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type) {
+    public DbCounterKeyImpl(@NotNull Key id, @NotNull EntityTypeImpl<K> type, int scale) {
         super(id, type, false);
+        this.scale = scale;
     }
 
     @NotNull
     @Override
     public ValueForm.LongForm form() {
         return ValueForm.LongForm.ZERO;
+    }
+
+    @Override
+    public int scale() {
+        return this.scale;
     }
 }

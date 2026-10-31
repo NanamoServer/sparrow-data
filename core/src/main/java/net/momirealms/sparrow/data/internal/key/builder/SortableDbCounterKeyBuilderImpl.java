@@ -12,16 +12,25 @@ import org.jetbrains.annotations.NotNull;
 public final class SortableDbCounterKeyBuilderImpl<K> implements SortableDbCounterKeyBuilder<K> {
     private final EntityTypeImpl<K> type;
     private final Key id;
+    private int scale;
 
-    public SortableDbCounterKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id) {
+    public SortableDbCounterKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id, int scale) {
         this.type = type;
         this.id = id;
+        this.scale = scale;
+    }
+
+    @NotNull
+    @Override
+    public SortableDbCounterKeyBuilder<K> scale(int scale) {
+        this.scale = ScaleRange.require(scale);
+        return this;
     }
 
     @NotNull
     @Override
     public SortableDbCounterKey<K> register() {
-        SortableDbCounterKeyImpl<K> key = new SortableDbCounterKeyImpl<>(this.id, this.type);
+        SortableDbCounterKeyImpl<K> key = new SortableDbCounterKeyImpl<>(this.id, this.type, this.scale);
         this.type.keys().register(key);
         return key;
     }

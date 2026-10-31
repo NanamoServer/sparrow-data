@@ -14,6 +14,7 @@ public final class DbMapCounterKeyBuilderImpl<K, E> implements DbMapCounterKeyBu
     private final EntityTypeImpl<K> type;
     private final Key id;
     private final EntryKeyCodec<E> entryCodec;
+    private int scale;
 
     public DbMapCounterKeyBuilderImpl(@NotNull EntityTypeImpl<K> type, @NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec) {
         this.type = type;
@@ -23,8 +24,15 @@ public final class DbMapCounterKeyBuilderImpl<K, E> implements DbMapCounterKeyBu
 
     @NotNull
     @Override
+    public DbMapCounterKeyBuilder<K, E> scale(int scale) {
+        this.scale = ScaleRange.require(scale);
+        return this;
+    }
+
+    @NotNull
+    @Override
     public DbMapCounterKey<K, E> register() {
-        DbMapCounterKeyImpl<K, E> key = new DbMapCounterKeyImpl<>(this.id, this.type, this.entryCodec);
+        DbMapCounterKeyImpl<K, E> key = new DbMapCounterKeyImpl<>(this.id, this.type, this.entryCodec, this.scale);
         this.type.keys().register(key);
         return key;
     }
