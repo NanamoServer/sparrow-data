@@ -1,14 +1,11 @@
 package net.momirealms.sparrow.data.internal;
 
-import io.lettuce.core.api.StatefulRedisConnection;
 import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.data.DataService;
 import net.momirealms.sparrow.data.Transaction;
 import net.momirealms.sparrow.data.entity.EntityIdCodec;
 import net.momirealms.sparrow.data.entity.EntityType;
 import net.momirealms.sparrow.data.internal.db.TransactionImpl;
-import net.momirealms.sparrow.data.internal.memory.AutoSaver;
-import net.momirealms.sparrow.data.internal.redis.ReplicaStore;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.redis.messagebroker.Logger;
@@ -17,6 +14,8 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,31 +29,28 @@ public final class DataServiceImpl implements DataService {
 
     private final EntityStorage storage;
     private final Executor executor;
-    private final ReplicaStore replicas;
     private final DataMessenger<?> messenger;
     private final Logger logger;
-    private final AutoSaver autoSaver;
+    private final Duration saveInterval;
     private final Duration snapshotExpiry;
 
     private final Map<String, EntityTypeImpl<?>> entityTypes = new ConcurrentHashMap<>();
 
-    // 组装数据层. 构造时在 broker 上注册失效和覆盖消息, 所以同一个频道上的服务器要在同样的位置构造, 并且在 broker.subscribe() 之前
+    // 组装数据层. 构造时在 broker 上注册数据层的消息, 所以同一个频道上的服务器要在同样的位置构造, 并且在 broker.subscribe() 之前.
+    // 数据层不自建线程, 存储调用在宿主的 Executor 上, 收到的消息在 Redis 的订阅线程上处理
     public DataServiceImpl(
             @NotNull EntityStorage storage,
             @NotNull Executor executor,
-            @NotNull StatefulRedisConnection<byte[], byte[]> redis,
             @NotNull MessageBroker<? extends ByteBuf> broker,
             @NotNull Logger logger,
             @NotNull Duration saveInterval,
-            @NotNull Duration replicaTtl,
             @NotNull Duration snapshotExpiry
     ) {
         this.storage = storage;
         this.executor = executor;
-        this.replicas = new ReplicaStore(redis, replicaTtl);
         this.messenger = DataMessenger.register(broker);
         this.logger = logger;
-        this.autoSaver = new AutoSaver(saveInterval);
+        this.saveInterval = saveInterval;
         this.snapshotExpiry = snapshotExpiry;
     }
 
@@ -77,9 +73,20 @@ public final class DataServiceImpl implements DataService {
         return CompletableFuture.supplyAsync(() -> new TransactionImpl(this.storage).run(body), this.executor);
     }
 
+    // 停服时调用, 阻塞到全部完成. 对每个类型持有中和正在排队 online / offline 的实体各做一次 offline, 也就是释放再落库,
+    // 定时落库到点时看到已释放就停. 全部完成后不再处理收到的消息. 宿主传入的对象在这之后由宿主关闭.
+    // 某个实体的 offline 失败时, 其他实体照样做完, 然后把异常抛给调用方
     @Override
     public void close() {
-        throw new UnsupportedOperationException("Not implemented yet");
+        List<CompletableFuture<Void>> offlines = new ArrayList<>();
+        for (EntityTypeImpl<?> type : this.entityTypes.values()) {
+            offlines.add(type.residence().offlineAll());
+        }
+        try {
+            CompletableFuture.allOf(offlines.toArray(new CompletableFuture<?>[0])).join();
+        } finally {
+            this.messenger.unlistenAll();
+        }
     }
 
     @NotNull
@@ -93,11 +100,6 @@ public final class DataServiceImpl implements DataService {
     }
 
     @NotNull
-    public ReplicaStore replicas() {
-        return this.replicas;
-    }
-
-    @NotNull
     public DataMessenger<?> messenger() {
         return this.messenger;
     }
@@ -108,8 +110,8 @@ public final class DataServiceImpl implements DataService {
     }
 
     @NotNull
-    public AutoSaver autoSaver() {
-        return this.autoSaver;
+    public Duration saveInterval() {
+        return this.saveInterval;
     }
 
     @NotNull

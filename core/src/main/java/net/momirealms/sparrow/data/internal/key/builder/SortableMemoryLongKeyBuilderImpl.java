@@ -34,7 +34,6 @@ public final class SortableMemoryLongKeyBuilderImpl<K> implements SortableMemory
     @Override
     public CompletableFuture<SortableMemoryKey<K>> register() {
         SortableMemoryKeyImpl<K> key = new SortableMemoryKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue));
-        this.type.keys().register(key);
-        return CompletableFuture.completedFuture(key);
+        return this.type.backfill().register(key).<SortableMemoryKey<K>>thenApply(ignored -> key);
     }
 }

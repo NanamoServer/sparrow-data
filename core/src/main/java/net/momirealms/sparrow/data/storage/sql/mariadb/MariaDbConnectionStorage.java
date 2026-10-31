@@ -345,11 +345,11 @@ final class MariaDbConnectionStorage implements EntityStorage {
 
     // 跨所有实体删除一个键, 没有索引可用, 要扫全表. 在自动提交的连接上分批删除, 每批单独提交, 每次只锁住一批行
     @Override
-    public void purge(@NotNull String entityType, @NotNull StorageKey key) {
+    public void purge(@NotNull String entityType, @NotNull String keyId) {
         MariaDbTables tables = this.tables(entityType);
-        this.execute("purge " + key.id(), () -> {
-            this.deleteInBatches(tables.purgeDataBatch(PURGE_BATCH_SIZE), key.id(), PathCodec.entriesFrom(key.id()), PathCodec.entriesTo(key.id()));
-            this.deleteInBatches(tables.purgeRankedBatch(PURGE_BATCH_SIZE), key.id());
+        this.execute("purge " + keyId, () -> {
+            this.deleteInBatches(tables.purgeDataBatch(PURGE_BATCH_SIZE), keyId, PathCodec.entriesFrom(keyId), PathCodec.entriesTo(keyId));
+            this.deleteInBatches(tables.purgeRankedBatch(PURGE_BATCH_SIZE), keyId);
             return null;
         });
     }

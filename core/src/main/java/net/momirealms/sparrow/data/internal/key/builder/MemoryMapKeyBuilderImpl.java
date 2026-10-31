@@ -30,7 +30,6 @@ public final class MemoryMapKeyBuilderImpl<K, E, V> implements MemoryMapKeyBuild
     @Override
     public CompletableFuture<MemoryMapKey<K, E, V>> register() {
         MemoryMapKeyImpl<K, E, V> key = new MemoryMapKeyImpl<>(this.id, this.type, this.entryCodec, this.valueForm);
-        this.type.keys().register(key);
-        return CompletableFuture.completedFuture(key);
+        return this.type.backfill().register(key).<MemoryMapKey<K, E, V>>thenApply(ignored -> key);
     }
 }

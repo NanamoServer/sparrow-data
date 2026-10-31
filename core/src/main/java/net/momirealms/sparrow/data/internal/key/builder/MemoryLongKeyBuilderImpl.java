@@ -40,7 +40,6 @@ public final class MemoryLongKeyBuilderImpl<K> implements MemoryLongKeyBuilder<K
     @Override
     public CompletableFuture<MemoryKey<K, Long>> register() {
         MemoryKeyImpl<K, Long> key = new MemoryKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue));
-        this.type.keys().register(key);
-        return CompletableFuture.completedFuture(key);
+        return this.type.backfill().register(key).<MemoryKey<K, Long>>thenApply(ignored -> key);
     }
 }

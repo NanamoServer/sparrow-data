@@ -10,8 +10,10 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -29,7 +31,7 @@ public final class ResidenceImpl<K> implements Residence<K> {
         this.service = service;
     }
 
-    // 读出全部内存键, 删掉上一个持有者可能留下的副本, 然后本服成为持有者并开始定时落库. 实体 ID 在调用线程上编码
+    // 读出全部内存键, 然后本服成为持有者并开始定时落库. 实体 ID 在调用线程上编码
     @NotNull
     @Override
     public CompletableFuture<Void> online(@NotNull K id) {
@@ -37,24 +39,59 @@ public final class ResidenceImpl<K> implements Residence<K> {
         return this.enqueue(id, () -> this.load(id, ref));
     }
 
-    // 先释放, 之后的修改和 publish 都会抛异常; 再把释放之前的修改落库, 并 publish 本次持有期间 publish 过的键.
-    // 两者都排在已经在途的落库和 publish 后面, future 在都完成后结束, 下一个持有者 online 时不会再有这台服写的副本到达
+    // 先释放, 之后的修改和 publish 都会抛异常; 再把释放之前的修改落库, 这次落库排在已经在途的落库后面
     @NotNull
     @Override
     public CompletableFuture<Void> offline(@NotNull K id) {
         return this.enqueue(id, () -> this.unload(id));
     }
 
+    // DataService.close 时调用. 持有中的实体和还有 online / offline 在排队的实体各做一次 offline, 排在它们已有的步骤后面,
+    // 正在 online 的实体加载完之后马上被释放
+    @NotNull
+    public CompletableFuture<Void> offlineAll() {
+        Set<K> ids = new HashSet<>(this.type.heldEntities().keySet());
+        ids.addAll(this.pending.keySet());
+        CompletableFuture<?>[] offlines = new CompletableFuture<?>[ids.size()];
+        int index = 0;
+        for (K id : ids) {
+            offlines[index++] = this.offline(id);
+        }
+        return CompletableFuture.allOf(offlines);
+    }
+
+    // 读库之前开始缓冲收到的覆盖, 放进持有表之前先应用它们; 加载失败时丢掉缓冲
     @NotNull
     private CompletableFuture<Void> load(@NotNull K id, @NotNull EntityRef ref) {
-        // 加载, 建容器和删副本用同一份键集合
-        List<AbstractDataKey<K>> keys = this.type.keys().memoryKeys();
-        return CompletableFuture.supplyAsync(() -> new HeldEntity<>(ref, keys, this.service.storage().load(ref, storageKeys(keys))), this.service.executor())
-                .thenCompose(held -> this.deleteReplicas(ref, keys).thenApply(ignored -> held))
-                .thenAccept(held -> {
-                    this.type.putHeld(id, held);
-                    this.service.autoSaver().start(held, () -> this.autoSave(id, held));
+        OverrideService<K> overrides = this.type.overrides();
+        overrides.beginLoading(id);
+        return this.loadSlots(ref, this.type.keys().memoryKeys())
+                .thenCompose(slots -> this.hold(id, new HeldEntity<>(id, ref, slots, this.service)))
+                .whenComplete((ignored, error) -> {
+                    if (error != null) {
+                        overrides.abortLoading(id);
+                    }
                 });
+    }
+
+    // 加载期间键表可能变了. 放进持有表之前和键表对一遍, 新注册的内存键再读一次补进容器, 直到一致才放进持有表并开始定时落库
+    @NotNull
+    private CompletableFuture<Void> hold(@NotNull K id, @NotNull HeldEntity<K> held) {
+        List<AbstractDataKey<K>> missing = this.type.overrides().finishLoading(id, held);
+        if (missing.isEmpty()) {
+            held.startAutoSave();
+            return CompletableFuture.completedFuture(null);
+        }
+        return this.loadSlots(held.ref(), missing).thenCompose(slots -> {
+            held.attach(slots);
+            return this.hold(id, held);
+        });
+    }
+
+    // 在 Executor 上读库并解码成槽. online 和运行中注册内存键时的补读都用它
+    @NotNull
+    CompletableFuture<HeldEntity.Slots<K>> loadSlots(@NotNull EntityRef ref, @NotNull List<AbstractDataKey<K>> keys) {
+        return CompletableFuture.supplyAsync(() -> HeldEntity.decode(keys, this.service.storage().load(ref, storageKeys(keys))), this.service.executor());
     }
 
     @NotNull
@@ -62,36 +99,8 @@ public final class ResidenceImpl<K> implements Residence<K> {
         HeldEntity<K> held = this.type.removeHeld(id);
         // online 失败时没有容器, 不用做什么
         if (held == null) return CompletableFuture.completedFuture(null);
-        CompletableFuture<Void> published = held.release(this.service.publisher());
-        this.service.autoSaver().stop(held);
-        CompletableFuture<Void> saved = held.save(this.service.storage(), this.service.executor());
-        return CompletableFuture.allOf(published, saved);
-    }
-
-    // 上一个持有者宕机时, 副本里可能是从没落库的值, 和刚读出的 checkpoint 对不上. 删掉之后观察方会改读存储.
-    // 每个键一条 DEL, 同一条连接上的命令连着发出去, 只对确实删掉了副本的键广播失效
-    @NotNull
-    private CompletableFuture<Void> deleteReplicas(@NotNull EntityRef ref, @NotNull List<AbstractDataKey<K>> keys) {
-        int size = keys.size();
-        CompletableFuture<?>[] deletes = new CompletableFuture<?>[size];
-        for (int i = 0; i < size; i++) {
-            String keyId = keys.get(i).storageKey().id();
-            deletes[i] = this.service.replicas().delete(ref, keyId).thenAccept(deleted -> {
-                if (deleted) {
-                    this.service.messenger().invalidate(this.type.name(), ref.entityId(), keyId, null);
-                }
-            });
-        }
-        return CompletableFuture.allOf(deletes);
-    }
-
-    // 定时落库没有调用方, 失败在这里记日志
-    private void autoSave(@NotNull K id, @NotNull HeldEntity<K> held) {
-        held.save(this.service.storage(), this.service.executor()).whenComplete((ignored, error) -> {
-            if (error != null) {
-                this.service.logger().error("Failed to auto save " + this.type.name() + " " + id, error);
-            }
-        });
+        held.release();
+        return held.save();
     }
 
     // 新的一步接在这个实体的上一步后面, 上一步不管成功还是失败, 结束了就轮到它. 队列走空时从 pending 里移除

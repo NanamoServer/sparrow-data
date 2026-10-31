@@ -14,7 +14,6 @@ sparrow-nbt = "0.24"
 sparrow-redis-message-broker = "0.0.7"
 
 # Storage
-lettuce = "6.8.1.RELEASE"
 netty = "4.2.7.Final"
 
 [libraries]
@@ -31,7 +30,6 @@ sparrow-nbt-codec = { module = "net.momirealms:sparrow-nbt-codec", version.ref =
 sparrow-redis-message-broker = { module = "net.momirealms:sparrow-redis-message-broker", version.ref = "sparrow-redis-message-broker" }
 
 # Storage
-lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
 netty-buffer = { module = "io.netty:netty-buffer", version.ref = "netty" }
 
 [bundles]

@@ -6,9 +6,10 @@ import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.entity.Entity;
 import net.momirealms.sparrow.data.entity.EntityIdCodec;
 import net.momirealms.sparrow.data.entity.EntityType;
-import net.momirealms.sparrow.data.entity.Residence;
 import net.momirealms.sparrow.data.internal.db.DbOperations;
+import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.KeyRegistry;
+import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbCounterKeyBuilderImpl;
@@ -18,12 +19,15 @@ import net.momirealms.sparrow.data.internal.key.builder.DbMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryMapKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.memory.Backfill;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
+import net.momirealms.sparrow.data.internal.memory.OverrideService;
 import net.momirealms.sparrow.data.internal.memory.ResidenceImpl;
 import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
+import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.SortableKey;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
@@ -41,6 +45,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -59,8 +65,10 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     private final DbOperations<K> db;
     private final Map<K, HeldEntity<K>> heldEntities = new ConcurrentHashMap<>();
     private final ResidenceImpl<K> residence;
+    private final OverrideService<K> overrides;
+    private final Backfill<K> backfill;
 
-    // 一个实体类型在运行时的实现, 注册的键都登记在它自己的键表里. 它也是这个类型的消息接收方, 收到失效就让对应的快照重读
+    // 一个实体类型在运行时的实现, 注册的键都登记在它自己的键表里. 它也是这个类型的消息接收方, 收到失效让对应的快照重读, 收到 publish 直接更新快照
     public EntityTypeImpl(@NotNull DataServiceImpl service, @NotNull String name, @NotNull EntityIdCodec<K> idCodec) {
         this.service = service;
         this.name = name;
@@ -68,6 +76,8 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         this.snapshots = new SnapshotCache<>(service.snapshotExpiry(), service.logger());
         this.db = new DbOperations<>(this, service.storage(), service.executor(), service.messenger());
         this.residence = new ResidenceImpl<>(this, service);
+        this.overrides = new OverrideService<>(this, service);
+        this.backfill = new Backfill<>(this);
     }
 
     @NotNull
@@ -84,7 +94,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
-    public Residence<K> residence() {
+    public ResidenceImpl<K> residence() {
         return this.residence;
     }
 
@@ -143,16 +153,37 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         return new DbMapCounterKeyBuilderImpl<>(this, id, entryCodec);
     }
 
+    // DB 键只需要移出键表. 内存键移出键表后, 每个持有中的实体把这个键排进落库链, 落库时摘掉槽, future 在全部落库后结束.
+    // 两种键都丢掉本服这个键的快照, 库里的数据保留, 要删数据用 purge. 注销之后调用方不再使用旧的键对象
     @NotNull
     @Override
     public CompletableFuture<Void> unregister(@NotNull DataKey<K> key) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        String keyId = impl.storageKey().id();
+        if (!(key instanceof MemoryDataKey<?>)) {
+            this.keys.unregister(impl);
+            this.snapshots.discard(keyId);
+            return CompletableFuture.completedFuture(null);
+        }
+        Map<K, HeldEntity<K>> targets = this.overrides.beginUnregister(impl);
+        this.snapshots.discard(keyId);
+        CompletableFuture<?>[] saves = new CompletableFuture<?>[targets.size()];
+        int index = 0;
+        for (HeldEntity<K> held : targets.values()) {
+            saves[index++] = held.detach(impl);
+        }
+        return CompletableFuture.allOf(saves);
     }
 
+    // 跨所有实体删除一个键 ID 的数据, 用在功能永久下线. 本服还注册着这个 ID 时抛 IllegalStateException, 其他服先注销由调用方保证.
+    // 删完广播这个键在所有实体上的失效
     @NotNull
     @Override
     public CompletableFuture<Void> purge(@NotNull Key id) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        if (this.keys.get(id) != null) throw new IllegalStateException("Data key is still registered: " + id);
+        String keyId = id.toString();
+        return CompletableFuture.runAsync(() -> this.service.storage().purge(this.name, keyId), this.service.executor())
+                .thenRun(() -> this.service.messenger().invalidate(this.name, null, keyId, null));
     }
 
     @NotNull
@@ -190,10 +221,29 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         this.snapshots.invalidate(entityId == null ? null : this.idCodec.decode(entityId), keyId, entry);
     }
 
-    // 对快照来说覆盖和失效一样, 重读一次
+    // 对快照来说覆盖和失效一样, 重读一次. 本服持有或者正在加载这个实体时, 还要把新值交给持有端
     @Override
     public void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
-        this.snapshots.invalidate(this.idCodec.decode(entityId), keyId, entry);
+        K id = this.idCodec.decode(entityId);
+        this.snapshots.invalidate(id, keyId, entry);
+        this.overrides.receive(id, keyId, entry, value);
+    }
+
+    // 收到持有方 publish 的值. 本服在看这个对象时直接把值放进快照, 不重读库; 没人在看就不解码
+    @Override
+    public void publishValue(byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
+        K id = this.idCodec.decode(entityId);
+        if (!this.snapshots.isWatched(id, keyId)) return;
+        if (!(this.keys.get(Key.of(keyId)) instanceof ValueKeyImpl<?, ?> key)) return;
+        this.snapshots.put(id, keyId, null, key.form().load(value));
+    }
+
+    @Override
+    public void publishEntries(byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries) {
+        K id = this.idCodec.decode(entityId);
+        if (!this.snapshots.isWatched(id, keyId)) return;
+        if (!(this.keys.get(Key.of(keyId)) instanceof MapKeyImpl<?, ?, ?> key)) return;
+        this.putEntries(id, keyId, key, entries);
     }
 
     // 编码后的实体 ID 超过 64 字节时抛 IllegalArgumentException, 宿主自定义的编码器也一样
@@ -219,6 +269,12 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         return this.heldEntities.remove(id);
     }
 
+    // 复制一份这一刻的持有表, 补读和注销用它决定要处理哪些实体
+    @NotNull
+    public Map<K, HeldEntity<K>> heldEntities() {
+        return Map.copyOf(this.heldEntities);
+    }
+
     @NotNull
     public DataServiceImpl service() {
         return this.service;
@@ -242,5 +298,27 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     @NotNull
     public DbOperations<K> db() {
         return this.db;
+    }
+
+    @NotNull
+    public OverrideService<K> overrides() {
+        return this.overrides;
+    }
+
+    @NotNull
+    public Backfill<K> backfill() {
+        return this.backfill;
+    }
+
+    // 整个映射的快照用解码后的条目键, 单个条目的快照用编码后的条目键
+    private <E, V> void putEntries(@NotNull K id, @NotNull String keyId, @NotNull MapKeyImpl<?, E, V> key, @NotNull Map<String, StoredValue> stored) {
+        Map<String, V> entries = HashMap.newHashMap(stored.size());
+        Map<E, V> all = HashMap.newHashMap(stored.size());
+        stored.forEach((entry, value) -> {
+            V decoded = key.valueForm().load(value);
+            entries.put(entry, decoded);
+            all.put(key.entryCodec().decode(entry), decoded);
+        });
+        this.snapshots.putEntries(id, keyId, Collections.unmodifiableMap(all), entries);
     }
 }

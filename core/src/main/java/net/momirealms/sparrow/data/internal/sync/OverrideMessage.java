@@ -13,9 +13,6 @@ import org.jetbrains.annotations.Nullable;
 @ApiStatus.Internal
 public final class OverrideMessage<B extends ByteBuf> extends OneWayMessage<B> {
     static final MessageIdentifier ID = MessageIdentifier.of(DataMessenger.NAMESPACE, "override");
-    private static final byte NO_VALUE = 0;
-    private static final byte LONG_VALUE = 1;
-    private static final byte BYTES_VALUE = 2;
 
     private final DataMessenger<B> messenger;
     private final String entityType;
@@ -41,14 +38,9 @@ public final class OverrideMessage<B extends ByteBuf> extends OneWayMessage<B> {
         this.entityId = ByteBufHelper.readByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
         this.keyId = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.entry = ByteBufUtils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.value = switch (buf.readByte()) {
-            case LONG_VALUE -> new StoredValue.OfLong(buf.readLong());
-            case BYTES_VALUE -> new StoredValue.OfBytes(ByteBufHelper.readByteArray(buf, Integer.MAX_VALUE));
-            default -> null;
-        };
+        this.value = ValueCodec.read(buf);
     }
 
-    // 值先写一个字节表示形态, 再写内容
     @Override
     protected void write(@NotNull B buf) {
         super.write(buf);
@@ -56,17 +48,7 @@ public final class OverrideMessage<B extends ByteBuf> extends OneWayMessage<B> {
         ByteBufHelper.writeByteArray(buf, this.entityId);
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
         ByteBufUtils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
-        switch (this.value) {
-            case null -> buf.writeByte(NO_VALUE);
-            case StoredValue.OfLong number -> {
-                buf.writeByte(LONG_VALUE);
-                buf.writeLong(number.value());
-            }
-            case StoredValue.OfBytes bytes -> {
-                buf.writeByte(BYTES_VALUE);
-                ByteBufHelper.writeByteArray(buf, bytes.value());
-            }
-        }
+        ValueCodec.write(buf, this.value);
     }
 
     @Override

@@ -58,6 +58,19 @@ public final class SnapshotCache<K> {
         }
     }
 
+    // 只查询, 不算访问. 收到 publish 时先用它判断有没有人在看, 没人看就不解码
+    public boolean isWatched(@NotNull K id, @NotNull String keyId) {
+        return this.nodes.policy().getIfPresentQuietly(new Node<>(id, keyId)) != null;
+    }
+
+    // 收到映射键的 publish 时调用. 整个映射和已经在看的条目一起换成发来的值, 发来的条目里没有的记成 null. 在途的读取结果作废
+    @SuppressWarnings("unchecked")
+    public void putEntries(@NotNull K id, @NotNull String keyId, @NotNull Map<?, ?> all, @NotNull Map<String, ?> entries) {
+        Map<Slot, SingleFlightLoader<?>> flights = this.nodes.policy().getIfPresentQuietly(new Node<>(id, keyId));
+        if (flights == null) return;
+        flights.forEach((slot, flight) -> ((SingleFlightLoader<Object>) flight).put(slot.entry() == null ? all : entries.get(slot.entry())));
+    }
+
     // 范围和失效消息相同: entry 不为空是一个条目, 这时整个映射的快照也要重读; entry 为空是整个键;
     // keyId 为空是这个实体的全部键; id 为空是这个键在所有实体上. 快照里没有的对象没人在看, 不读
     public void invalidate(@Nullable K id, @Nullable String keyId, @Nullable String entry) {
@@ -78,6 +91,11 @@ public final class SnapshotCache<K> {
                 invalidateAll(flights);
             }
         });
+    }
+
+    // 注销键时调用, 丢掉这个键在所有实体上的快照, 不重读. 在途的读取完成后写进的是已经移除的节点, 不会再被访问
+    public void discard(@NotNull String keyId) {
+        this.nodes.asMap().keySet().removeIf(node -> node.keyId().equals(keyId));
     }
 
     @SuppressWarnings("unchecked")

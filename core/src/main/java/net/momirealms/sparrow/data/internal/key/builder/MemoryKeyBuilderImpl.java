@@ -27,7 +27,6 @@ public final class MemoryKeyBuilderImpl<K, T> implements MemoryKeyBuilder<K, T> 
     @Override
     public CompletableFuture<MemoryKey<K, T>> register() {
         MemoryKeyImpl<K, T> key = new MemoryKeyImpl<>(this.id, this.type, this.form);
-        this.type.keys().register(key);
-        return CompletableFuture.completedFuture(key);
+        return this.type.backfill().register(key).<MemoryKey<K, T>>thenApply(ignored -> key);
     }
 }

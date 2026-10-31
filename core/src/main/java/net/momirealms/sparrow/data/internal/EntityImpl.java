@@ -53,13 +53,6 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         this.requireHeld().write((ValueKeyImpl<K, T>) key, value);
     }
 
-    @Override
-    public <T> void writeAndPublish(@NotNull MemoryKey<K, T> key, @NotNull T value) {
-        HeldEntity<K> held = this.requireHeld();
-        held.write((ValueKeyImpl<K, T>) key, value);
-        this.enqueuePublish(held, (AbstractDataKey<K>) key);
-    }
-
     @NotNull
     @Override
     public <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator) {
@@ -98,50 +91,48 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.requireHeld().compute(impl, impl.entryCodec().encode(entry), operator);
     }
 
+    // 把这个键的当前值发给别的服, 不落库, 调用方不等结果. 要多久发一次由调用方决定
     @Override
     public void publish(@NotNull MemoryDataKey<K> key) {
-        this.enqueuePublish(this.requireHeld(), (AbstractDataKey<K>) key);
+        this.requireHeld().publish((AbstractDataKey<K>) key);
     }
 
-    // 排进这个实体的落库链, future 在这次存储调用完成后结束
+    // 排进这个实体的落库链, future 在这次存储调用完成后结束. 写完会广播写到的键的失效, 别的服重读库
     @NotNull
     @Override
     public CompletableFuture<Void> save() {
-        DataServiceImpl service = this.type.service();
-        return this.requireHeld().save(service.storage(), service.executor());
+        return this.requireHeld().save();
     }
 
-    // 落库和 publish 各自排进自己的链, future 在两者都完成后结束. 只 publish 本次持有期间 publish 过的键
-    @NotNull
-    @Override
-    public CompletableFuture<Void> saveAndPublish() {
-        HeldEntity<K> held = this.requireHeld();
-        DataServiceImpl service = this.type.service();
-        return CompletableFuture.allOf(held.save(service.storage(), service.executor()), held.publishAll(service.publisher()));
-    }
-
+    // 任何服, 不管这个实体被谁持有都能调用. future 在写库完成后结束, 广播在后台继续
     @NotNull
     @Override
     public <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @NotNull T value) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
+        return this.type.overrides().override(this.ref(), impl.storageKey(), null, impl.form(), value);
     }
 
+    // 重置是删掉存储的值, 持有者把它读成默认值或 Optional.empty()
     @NotNull
     @Override
     public CompletableFuture<Void> reset(@NotNull MemoryKey<K, ?> key) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        ValueKeyImpl<K, ?> impl = (ValueKeyImpl<K, ?>) key;
+        return this.type.overrides().override(this.ref(), impl.storageKey(), null, impl.form(), null);
     }
 
     @NotNull
     @Override
     public <E, V> CompletableFuture<Void> override(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
+        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.entryCodec().encode(entry), impl.valueForm(), value);
     }
 
+    // 重置映射键的条目就是删掉这个条目
     @NotNull
     @Override
     public <E> CompletableFuture<Void> reset(@NotNull MemoryMapKey<K, E, ?> key, @NotNull E entry) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
+        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.entryCodec().encode(entry), impl.valueForm(), null);
     }
 
     // 内存键在本服持有时直接读容器, 其他情况读快照. 读取函数在调用之前就编码好实体 ID, 交给快照后不会再抛异常
@@ -152,7 +143,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return held.get(impl);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.load(ref, impl));
+        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().read(ref, impl));
     }
 
     @Nullable
@@ -163,7 +154,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return held.get(impl, encoded);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peekEntry(this.id, impl.storageKey().id(), encoded, () -> this.loadEntry(ref, impl, encoded));
+        return this.type.snapshots().peekEntry(this.id, impl.storageKey().id(), encoded, () -> this.type.db().readEntry(ref, impl, encoded));
     }
 
     // 本服持有时内存键的条目总是已加载
@@ -181,7 +172,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return held.getAll(impl);
         EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.loadAll(ref, impl));
+        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().readAll(ref, impl));
     }
 
     @NotNull
@@ -190,7 +181,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return CompletableFuture.completedFuture(held.get(impl));
-        return this.load(this.ref(), impl);
+        return this.type.db().read(this.ref(), impl);
     }
 
     @NotNull
@@ -200,7 +191,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         String encoded = impl.entryCodec().encode(entry);
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return CompletableFuture.completedFuture(held.get(impl, encoded));
-        return this.loadEntry(this.ref(), impl, encoded);
+        return this.type.db().readEntry(this.ref(), impl, encoded);
     }
 
     @NotNull
@@ -209,7 +200,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return CompletableFuture.completedFuture(held.getAll(impl));
-        return this.loadAll(this.ref(), impl);
+        return this.type.db().readAll(this.ref(), impl);
     }
 
     @NotNull
@@ -298,10 +289,16 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.type.db().remove(this.id, impl, impl.entryCodec().encode(entry));
     }
 
+    // 删除这个实体的全部数据. 在 Executor 上删库, 删完广播这个实体全部键的失效, future 在删库完成后结束.
+    // 本服持有时抛 IllegalStateException, 持有方下次落库会把数据写回去; 别的服不持有由调用方保证
     @NotNull
     @Override
     public CompletableFuture<Void> delete() {
-        throw new UnsupportedOperationException("Not implemented yet");
+        if (this.type.held(this.id) != null) throw new IllegalStateException("Entity is held by this server: " + this.type.name() + " " + this.id);
+        EntityRef ref = this.ref();
+        DataServiceImpl service = this.type.service();
+        return CompletableFuture.runAsync(() -> service.storage().deleteEntity(ref), service.executor())
+                .thenRun(() -> service.messenger().invalidate(this.type.name(), ref.entityId(), null, null));
     }
 
     // 内存键的读写只有本服持有这个实体时才能用
@@ -312,38 +309,9 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return held;
     }
 
-    // publish 没有调用方等结果, 失败在这里记日志
-    private void enqueuePublish(@NotNull HeldEntity<K> held, @NotNull AbstractDataKey<K> key) {
-        DataServiceImpl service = this.type.service();
-        held.publish(service.publisher(), key).whenComplete((ignored, error) -> {
-            if (error != null) {
-                service.logger().error("Failed to publish " + this.type.name() + " " + this.id + " " + key.id(), error);
-            }
-        });
-    }
-
     // 内存键在本服持有时返回它的容器, 其他情况返回 null
     @Nullable
     private HeldEntity<K> heldFor(@NotNull DataKey<K> key) {
         return key instanceof MemoryDataKey<?> ? this.type.held(this.id) : null;
-    }
-
-    // 读权威位置. DB 键读存储; 本服没有持有的内存键先读副本, 没有副本再读存储
-    @NotNull
-    private <T> CompletableFuture<T> load(@NotNull EntityRef ref, @NotNull ValueKeyImpl<K, T> key) {
-        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().read(ref, key);
-        return this.type.db().read(ref, key);
-    }
-
-    @NotNull
-    private <V> CompletableFuture<@Nullable V> loadEntry(@NotNull EntityRef ref, @NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry) {
-        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().readEntry(ref, key, entry);
-        return this.type.db().readEntry(ref, key, entry);
-    }
-
-    @NotNull
-    private <E, V> CompletableFuture<Map<E, V>> loadAll(@NotNull EntityRef ref, @NotNull MapKeyImpl<K, E, V> key) {
-        if (key instanceof MemoryDataKey<?>) return this.type.replicaReader().readAll(ref, key);
-        return this.type.db().readAll(ref, key);
     }
 }

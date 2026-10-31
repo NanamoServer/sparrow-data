@@ -33,8 +33,6 @@ public interface Entity<K> {
 
     <T> void write(@NotNull MemoryKey<K, T> key, @NotNull T value);
 
-    <T> void writeAndPublish(@NotNull MemoryKey<K, T> key, @NotNull T value);
-
     @NotNull
     <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator);
 
@@ -55,9 +53,6 @@ public interface Entity<K> {
 
     @NotNull
     CompletableFuture<Void> save();
-
-    @NotNull
-    CompletableFuture<Void> saveAndPublish();
 
     @NotNull
     <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @NotNull T value);

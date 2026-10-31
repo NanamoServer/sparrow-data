@@ -25,7 +25,7 @@ public final class DataMessenger<B extends ByteBuf> {
         this.broker = broker;
     }
 
-    // 在宿主的 broker 上注册失效和覆盖消息. 宿主传入的是 MessageBroker<? extends ByteBuf>, 调用这个泛型方法时通配符被捕获成 B,
+    // 在宿主的 broker 上注册失效, 覆盖和 publish 消息. 宿主传入的是 MessageBroker<? extends ByteBuf>, 调用这个泛型方法时通配符被捕获成 B,
     // 消息类和编解码器都按 B 写就能注册上去. broker 按注册顺序给消息编号, 所以同一个频道上的服务器都要在同样的位置注册,
     // 并且在 broker.subscribe() 之前注册
     @NotNull
@@ -33,11 +33,17 @@ public final class DataMessenger<B extends ByteBuf> {
         DataMessenger<B> messenger = new DataMessenger<>(broker);
         broker.registry().register(InvalidateMessage.ID, RedisMessage.codec(InvalidateMessage::write, buf -> new InvalidateMessage<>(messenger, buf)));
         broker.registry().register(OverrideMessage.ID, RedisMessage.codec(OverrideMessage::write, buf -> new OverrideMessage<>(messenger, buf)));
+        broker.registry().register(PublishMessage.ID, RedisMessage.codec(PublishMessage::write, buf -> new PublishMessage<>(messenger, buf)));
         return messenger;
     }
 
     public void listen(@NotNull String entityType, @NotNull Listener listener) {
         this.listeners.put(entityType, listener);
+    }
+
+    // DataService.close 的最后调用, 之后收到的消息都忽略. 消息类型还留在宿主的 broker 上, 编号不变
+    public void unlistenAll() {
+        this.listeners.clear();
     }
 
     // 广播给所有服务器, 包括本服自己. 范围的含义见 InvalidateMessage 的构造器
@@ -47,6 +53,15 @@ public final class DataMessenger<B extends ByteBuf> {
 
     public void override(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
         this.broker.publishOneWay(new OverrideMessage<>(this, entityType, entityId, keyId, entry, value), BROADCAST);
+    }
+
+    // value 为空表示 publish 的是"没有值"
+    public void publishValue(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
+        this.broker.publishOneWay(new PublishMessage<>(this, entityType, entityId, keyId, value, null), BROADCAST);
+    }
+
+    public void publishEntries(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries) {
+        this.broker.publishOneWay(new PublishMessage<>(this, entityType, entityId, keyId, null, entries), BROADCAST);
     }
 
     // broker 在 Redis 的订阅线程上调用. 这里只按实体类型找到监听者, 本服没有这个实体类型时忽略
@@ -64,11 +79,26 @@ public final class DataMessenger<B extends ByteBuf> {
         }
     }
 
-    // 一个实体类型的消息接收方. 在 Redis 的订阅线程上调用, 这个线程卡住会让所有消息排队, 所以实现里只做分发, 重读交给数据层自己的线程
+    void receive(@NotNull PublishMessage<B> message) {
+        Listener listener = this.listeners.get(message.entityType());
+        if (listener == null) return;
+        Map<String, StoredValue> entries = message.entries();
+        if (entries == null) {
+            listener.publishValue(message.entityId(), message.keyId(), message.value());
+        } else {
+            listener.publishEntries(message.entityId(), message.keyId(), entries);
+        }
+    }
+
+    // 一个实体类型的消息接收方, 在 Redis 的订阅线程上直接处理. 解码和写进内存都只要微秒, 读库这类要等的事交给宿主的 Executor
     public interface Listener {
 
         void invalidate(byte @Nullable [] entityId, @Nullable String keyId, @Nullable String entry);
 
         void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value);
+
+        void publishValue(byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value);
+
+        void publishEntries(byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries);
     }
 }

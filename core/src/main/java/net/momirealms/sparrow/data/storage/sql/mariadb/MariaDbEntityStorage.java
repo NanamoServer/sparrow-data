@@ -127,9 +127,9 @@ public final class MariaDbEntityStorage implements EntityStorage {
     }
 
     @Override
-    public void purge(@NotNull String entityType, @NotNull StorageKey key) {
+    public void purge(@NotNull String entityType, @NotNull String keyId) {
         this.withConnection(storage -> {
-            storage.purge(entityType, key);
+            storage.purge(entityType, keyId);
             return null;
         });
     }
