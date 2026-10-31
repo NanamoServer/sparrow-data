@@ -20,7 +20,6 @@ import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -205,10 +204,6 @@ final class MysqlConnectionStorage implements EntityStorage {
 
     @Override
     public boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @Nullable [] expected, byte @NotNull [] value) {
-        // 新旧字节相同时 UPDATE 不会改动这一行, 影响行数取决于驱动的 useAffectedRows 设置. 这种情况只需要确认当前值等于 expected
-        if (expected != null && Arrays.equals(expected, value)) {
-            return this.read(entity, key, entry) instanceof StoredValue.OfBytes current && Arrays.equals(current.value(), expected);
-        }
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("compare and set " + key.id(), () -> {
             if (expected == null) {

@@ -15,6 +15,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -105,10 +106,12 @@ public final class DbOperations<K> {
         }
     }
 
-    // 可选键的 operator 返回 Optional.empty() 时 stored 为 null, 这时以读到的字节为条件删除, 本来就没有值时不用写
+    // 可选键的 operator 返回 Optional.empty() 时 stored 为 null, 这时以读到的字节为条件删除, 本来就没有值时不用写.
+    // 新字节和读到的一样时也不用写, 相当于在读到的那一刻做了一次没有改动的更新. 存储因此不会收到 expected 和新值相同的 CAS
     private static boolean compareAndWrite(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull StorageKey key, byte @Nullable [] expected, @Nullable StoredValue stored) {
-        if (stored != null) return storage.compareAndSet(ref, key, null, expected, ((StoredValue.OfBytes) stored).value());
-        return expected == null || storage.compareAndRemove(ref, key, null, expected);
+        if (stored == null) return expected == null || storage.compareAndRemove(ref, key, null, expected);
+        byte[] value = ((StoredValue.OfBytes) stored).value();
+        return Arrays.equals(expected, value) || storage.compareAndSet(ref, key, null, expected, value);
     }
 
     @NotNull
@@ -185,7 +188,8 @@ public final class DbOperations<K> {
         });
     }
 
-    // 和 updateValue 一样是 CAS 循环, 但只改已经存在的条目. 读不到就返回 null, 刚被删掉的条目不会被这次更新重新建出来
+    // 和 updateValue 一样是 CAS 循环, 新字节和读到的一样时同样不写. 只改已经存在的条目, 读不到就返回 null,
+    // 刚被删掉的条目不会被这次更新重新建出来
     @Nullable
     static <V> V updateEntry(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull DbMapKeyImpl<?, ?, V> key, @NotNull String entry, @NotNull UnaryOperator<V> operator) {
         ValueForm<V> form = key.valueForm();
@@ -194,8 +198,9 @@ public final class DbOperations<K> {
             StoredValue current = storage.read(ref, storageKey, entry);
             if (current == null) return null;
             V value = operator.apply(form.load(current));
-            StoredValue.OfBytes stored = (StoredValue.OfBytes) form.store(value);
-            if (storage.compareAndSet(ref, storageKey, entry, ((StoredValue.OfBytes) current).value(), stored.value())) return value;
+            byte[] expected = ((StoredValue.OfBytes) current).value();
+            byte[] updated = ((StoredValue.OfBytes) form.store(value)).value();
+            if (Arrays.equals(expected, updated) || storage.compareAndSet(ref, storageKey, entry, expected, updated)) return value;
         }
     }
 
