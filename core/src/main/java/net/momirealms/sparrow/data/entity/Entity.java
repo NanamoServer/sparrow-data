@@ -66,6 +66,12 @@ public interface Entity<K> {
     @NotNull
     <E> CompletableFuture<Void> reset(@NotNull MemoryMapKey<K, E, ?> key, @NotNull E entry);
 
+    @NotNull
+    <T> Watch watch(@NotNull ValueKey<K, T> key, @NotNull Runnable onChange);
+
+    @NotNull
+    <E> Watch watch(@NotNull MapKey<K, E, ?> key, @NotNull E entry, @NotNull Runnable onChange);
+
     @Nullable
     <T> T peek(@NotNull ValueKey<K, T> key);
 

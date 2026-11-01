@@ -77,6 +77,7 @@ public final class OverrideService<K> {
             }
         }
         held.override(received.key(), received.entry(), received.stored());
+        this.type.watches().touch(id, keyId, entry);
     }
 
     // online 开始读库之前调用. 读库可能发生在某次覆盖写库之前, 读出来的是旧值, 所以从这里开始收到的覆盖先缓冲

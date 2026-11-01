@@ -79,6 +79,7 @@ public final class ResidenceImpl<K> implements Residence<K> {
     private CompletableFuture<Void> hold(@NotNull K id, @NotNull HeldEntity<K> held) {
         List<AbstractDataKey<K>> missing = this.type.overrides().finishLoading(id, held);
         if (missing.isEmpty()) {
+            this.type.watches().touchEntity(id);
             held.startAutoSave();
             return CompletableFuture.completedFuture(null);
         }
@@ -94,13 +95,24 @@ public final class ResidenceImpl<K> implements Residence<K> {
         return CompletableFuture.supplyAsync(() -> HeldEntity.decode(keys, this.service.storage().load(ref, storageKeys(keys))), this.service.executor());
     }
 
+    // 先释放容器, 再把被观察的内存键的值交给快照, 最后移出持有表, 观察方看到的值不会断档. 落库完成之前这个实体内存键的快照不重读,
+    // 期间收到的失效等落库后一起处理, 读不到落库之前的旧值
     @NotNull
     private CompletableFuture<Void> unload(@NotNull K id) {
-        HeldEntity<K> held = this.type.removeHeld(id);
+        HeldEntity<K> held = this.type.held(id);
         // online 失败时没有容器, 不用做什么
         if (held == null) return CompletableFuture.completedFuture(null);
+        List<AbstractDataKey<K>> memoryKeys = this.type.keys().memoryKeys();
+        Set<String> keyIds = HashSet.newHashSet(memoryKeys.size());
+        for (int i = 0, size = memoryKeys.size(); i < size; i++) {
+            keyIds.add(memoryKeys.get(i).storageKey().id());
+        }
+        this.type.snapshots().fence(id, keyIds);
         held.release();
-        return held.save();
+        this.type.watches().handOff(id);
+        this.type.removeHeld(id);
+        this.type.watches().touchEntity(id);
+        return held.save().whenComplete((ignored, error) -> this.type.snapshots().unfence(id));
     }
 
     // 新的一步接在这个实体的上一步后面, 上一步不管成功还是失败, 结束了就轮到它. 队列走空时从 pending 里移除

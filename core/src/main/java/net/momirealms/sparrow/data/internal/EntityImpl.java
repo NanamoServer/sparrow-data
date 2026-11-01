@@ -1,6 +1,7 @@
 package net.momirealms.sparrow.data.internal;
 
 import net.momirealms.sparrow.data.entity.Entity;
+import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.DbKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapCounterKeyImpl;
@@ -50,13 +51,18 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @Override
     public <T> void write(@NotNull MemoryKey<K, T> key, @NotNull T value) {
-        this.requireHeld().write((ValueKeyImpl<K, T>) key, value);
+        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
+        this.requireHeld().write(impl, value);
+        this.type.watches().touch(this.id, impl.storageKey().id(), null);
     }
 
     @NotNull
     @Override
     public <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator) {
-        return this.requireHeld().update((ValueKeyImpl<K, T>) key, operator);
+        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
+        T value = this.requireHeld().update(impl, operator);
+        this.type.watches().touch(this.id, impl.storageKey().id(), null);
+        return value;
     }
 
     @Nullable
@@ -75,20 +81,27 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @Override
     public <E, V> void put(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        this.requireHeld().put(impl, impl.entryCodec().encode(entry), value);
+        String encoded = impl.entryCodec().encode(entry);
+        this.requireHeld().put(impl, encoded, value);
+        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
     }
 
     @Override
     public <E, V> void remove(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        this.requireHeld().remove(impl, impl.entryCodec().encode(entry));
+        String encoded = impl.entryCodec().encode(entry);
+        this.requireHeld().remove(impl, encoded);
+        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
     }
 
     @Nullable
     @Override
     public <E, V> V compute(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<@Nullable V> operator) {
         MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        return this.requireHeld().compute(impl, impl.entryCodec().encode(entry), operator);
+        String encoded = impl.entryCodec().encode(entry);
+        V value = this.requireHeld().compute(impl, encoded, operator);
+        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
+        return value;
     }
 
     // 把这个键的当前值发给别的服, 不落库, 调用方不等结果. 要多久发一次由调用方决定
@@ -133,6 +146,19 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <E> CompletableFuture<Void> reset(@NotNull MemoryMapKey<K, E, ?> key, @NotNull E entry) {
         MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
         return this.type.overrides().override(this.ref(), impl.storageKey(), impl.entryCodec().encode(entry), impl.valueForm(), null);
+    }
+
+    @NotNull
+    @Override
+    public <T> Watch watch(@NotNull ValueKey<K, T> key, @NotNull Runnable onChange) {
+        return this.type.watches().watch(this.id, (ValueKeyImpl<K, T>) key, onChange);
+    }
+
+    @NotNull
+    @Override
+    public <E> Watch watch(@NotNull MapKey<K, E, ?> key, @NotNull E entry, @NotNull Runnable onChange) {
+        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
+        return this.type.watches().watch(this.id, impl, impl.entryCodec().encode(entry), onChange);
     }
 
     // 内存键在本服持有时直接读容器, 其他情况读快照. 读取函数在调用之前就编码好实体 ID, 交给快照后不会再抛异常

@@ -23,6 +23,7 @@ import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.internal.memory.OverrideService;
 import net.momirealms.sparrow.data.internal.memory.ResidenceImpl;
 import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
+import net.momirealms.sparrow.data.internal.watch.WatchHub;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
@@ -61,6 +62,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     private final String name;
     private final EntityIdCodec<K> idCodec;
     private final KeyRegistry<K> keys = new KeyRegistry<>();
+    private final WatchHub<K> watches;
     private final SnapshotCache<K> snapshots;
     private final DbOperations<K> db;
     private final Map<K, HeldEntity<K>> heldEntities = new ConcurrentHashMap<>();
@@ -73,7 +75,8 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         this.service = service;
         this.name = name;
         this.idCodec = idCodec;
-        this.snapshots = new SnapshotCache<>(service.snapshotExpiry());
+        this.watches = new WatchHub<>(this);
+        this.snapshots = new SnapshotCache<>(service.snapshotExpiry(), this.watches);
         this.db = new DbOperations<>(this, service.storage(), service.executor(), service.messenger());
         this.residence = new ResidenceImpl<>(this, service);
         this.overrides = new OverrideService<>(this, service);
@@ -163,10 +166,12 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         if (!(key instanceof MemoryDataKey<?>)) {
             this.keys.unregister(impl);
             this.snapshots.discard(keyId);
+            this.watches.discard(keyId);
             return CompletableFuture.completedFuture(null);
         }
         Map<K, HeldEntity<K>> targets = this.overrides.beginUnregister(impl);
         this.snapshots.discard(keyId);
+        this.watches.discard(keyId);
         CompletableFuture<?>[] saves = new CompletableFuture<?>[targets.size()];
         int index = 0;
         for (HeldEntity<K> held : targets.values()) {
@@ -288,6 +293,11 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     @NotNull
     public KeyRegistry<K> keys() {
         return this.keys;
+    }
+
+    @NotNull
+    public WatchHub<K> watches() {
+        return this.watches;
     }
 
     @NotNull

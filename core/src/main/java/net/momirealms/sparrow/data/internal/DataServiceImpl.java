@@ -82,6 +82,9 @@ public final class DataServiceImpl implements DataService {
             CompletableFuture.allOf(offlines.toArray(new CompletableFuture<?>[0])).join();
         } finally {
             this.messenger.unlistenAll();
+            for (EntityTypeImpl<?> type : this.entityTypes.values()) {
+                type.watches().clear();
+            }
         }
     }
 
