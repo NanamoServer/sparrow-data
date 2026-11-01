@@ -177,6 +177,27 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 - 解码出来的 list 和 map 不可修改。struct 的字段带长度前缀、按顺序读；新字段加在末尾，读的一方会忽略自己不认识的尾部数据。
 - 组合出来的 codec 存成常量，`list`、`map`、`optional`、`struct` 每次调用都会新建一个 codec。
 
+## 观察值的变化
+
+`watch` 在一个键（或映射的一个条目）能看到的值可能变了时通知：本服持有这个实体时是持有容器里的值，其他情况是快照里的值。回调不带值，用 `peek` 读。
+
+```java
+// 打开离线玩家的资料菜单, 不显示加载中, 之后跟着变
+Watch watch = target.watch(PROFILE, menu::refresh);
+watch.ready()
+        .thenRunAsync(() -> menu.open(target.peek(PROFILE)), mainThread)
+        .exceptionally(error -> {
+            watch.close();
+            return null;
+        });
+// 菜单关闭时
+watch.close();
+```
+
+- `ready()` 在 `peek` 能读到值时完成：本服持有或快照已经加载过时立刻完成，否则在首次加载完成时完成，并且先于第一次回调。首次加载失败时带着存储的异常失败；在此之前 watch 被关闭、键被注销或数据层关闭时被取消。
+- 回调和 `ready()` 后面的步骤在触发改动的线程上执行，可能是写入线程、Executor 或 Redis 的订阅线程。回调要快，其他事情切到自己的线程去做。
+- 有人观察的快照不会过期，打开的 watch 都要关掉。
+
 ## 小数计数
 
 `dbCounter`、`dbMapCounter`、`memoryLong` 都可以设 `scale(int)`（0 到 18）。键存取的仍然是最小单位的 `long`，精度只用来换算：

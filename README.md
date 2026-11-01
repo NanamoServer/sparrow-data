@@ -177,6 +177,27 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 - Decoded lists and maps are unmodifiable. Struct fields are length-prefixed and read in order; new fields go at the end, and readers ignore trailing data they don't know.
 - Store composed codecs in constants: `list`, `map`, `optional` and `struct` create a new codec on every call.
 
+## Watching values
+
+`watch` notifies when the visible value of a key (or one map entry) may have changed: the holder's value while this server holds the entity, the snapshot otherwise. The callback carries no value; read it with `peek`.
+
+```java
+// open a menu for an offline player without a loading state, then keep it in sync
+Watch watch = target.watch(PROFILE, menu::refresh);
+watch.ready()
+        .thenRunAsync(() -> menu.open(target.peek(PROFILE)), mainThread)
+        .exceptionally(error -> {
+            watch.close();
+            return null;
+        });
+// when the menu closes
+watch.close();
+```
+
+- `ready()` completes once `peek` can read the value: immediately if it's held here or already in the snapshot, otherwise when the first load lands, before the first callback. It fails with the storage exception if that load fails, and is cancelled if the watch is closed, the key unregistered or the data service closed first.
+- Callbacks and `ready()` stages run on whichever thread caused the change (the writer, the executor or the Redis subscription thread). Keep callbacks fast and hop to your own thread for anything else.
+- Watched snapshots don't expire. Close every watch you open.
+
 ## Decimal counters
 
 `dbCounter`, `dbMapCounter` and `memoryLong` accept `scale(int)` (0 to 18). The key still stores and exchanges a `long` in minor units; the scale only drives conversion:
