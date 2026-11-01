@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 @ApiStatus.Internal
@@ -16,6 +17,7 @@ public final class SingleFlightLoader<V> {
     private final Supplier<CompletableFuture<V>> loader;
     private final String name;
     private final Runnable replaced;
+    private final Consumer<Throwable> failed;
 
     private @Nullable V value;
     private boolean loaded;
@@ -24,11 +26,13 @@ public final class SingleFlightLoader<V> {
     private boolean discardResult;
 
     // 一个快照对象的值和它的读取状态.
-    // loader 不抛异常, 失败通过返回的 future 表达; 它只发起读取, 不在调用线程上等结果. 值被换掉之后在锁外调用 replaced
-    SingleFlightLoader(@NotNull Supplier<CompletableFuture<V>> loader, @NotNull String name, @NotNull Runnable replaced) {
+    // loader 不抛异常, 失败通过返回的 future 表达; 它只发起读取, 不在调用线程上等结果. 值被换掉之后在锁外调用 replaced,
+    // 读取失败时在锁外调用 failed
+    SingleFlightLoader(@NotNull Supplier<CompletableFuture<V>> loader, @NotNull String name, @NotNull Runnable replaced, @NotNull Consumer<Throwable> failed) {
         this.loader = loader;
         this.name = name;
         this.replaced = replaced;
+        this.failed = failed;
     }
 
     // 返回当前的快照. 还没加载过时返回 null, 并发起第一次读取
@@ -121,6 +125,7 @@ public final class SingleFlightLoader<V> {
         }
         if (error != null) {
             LOGGER.error("Failed to load snapshot {}", this.name, error);
+            this.failed.accept(error);
         }
         if (again) {
             this.load();

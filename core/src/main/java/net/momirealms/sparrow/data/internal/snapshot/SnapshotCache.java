@@ -154,7 +154,12 @@ public final class SnapshotCache<K> {
     @NotNull
     private <V> SingleFlightLoader<V> flight(@NotNull K id, @NotNull String keyId, @NotNull Slot slot, @NotNull Supplier<CompletableFuture<V>> loader) {
         Map<Slot, SingleFlightLoader<?>> flights = this.nodes.get(new Node<>(id, keyId), node -> new ConcurrentHashMap<>());
-        return (SingleFlightLoader<V>) flights.computeIfAbsent(slot, created -> new SingleFlightLoader<>(loader, describe(id, keyId, created), () -> this.observer.replaced(id, keyId, created.entry())));
+        return (SingleFlightLoader<V>) flights.computeIfAbsent(slot, created -> new SingleFlightLoader<>(
+                loader,
+                describe(id, keyId, created),
+                () -> this.observer.replaced(id, keyId, created.entry()),
+                error -> this.observer.failed(id, keyId, created.entry(), error)
+        ));
     }
 
     private static void invalidateIfPresent(@Nullable SingleFlightLoader<?> flight) {
@@ -180,6 +185,9 @@ public final class SnapshotCache<K> {
         boolean pinned(@NotNull K id, @NotNull String keyId);
 
         void replaced(@NotNull K id, @NotNull String keyId, @Nullable String entry);
+
+        // 某个快照的读取失败后调用, error 是读取 future 给出的异常
+        void failed(@NotNull K id, @NotNull String keyId, @Nullable String entry, @NotNull Throwable error);
     }
 
     private record Node<K>(@NotNull K id, @NotNull String keyId) {

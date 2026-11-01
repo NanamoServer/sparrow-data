@@ -21,6 +21,9 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -105,6 +108,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         for (int i = 0, size = retired.size(); i < size; i++) {
             Binding binding = retired.get(i);
             if (binding.closed.compareAndSet(false, true)) {
+                binding.cancel("Watched key was unregistered before the watch was ready");
                 binding.notifyChange();
             }
         }
@@ -116,6 +120,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             for (Node node : targets.values()) {
                 for (Binding binding : node.bindings) {
                     binding.closed.set(true);
+                    binding.cancel("Data service was closed before the watch was ready");
                 }
             }
         }
@@ -137,16 +142,31 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         this.touch(id, keyId, entry);
     }
 
-    // 先登记再让快照加载, 加载完成时的 touch 一定能找到这个节点. 节点第一次建出来时记下当前看到的值, 之后变了才通知
+    // 读取 future 给出的是包着存储异常的 CompletionException, 交给 ready 的是里面的存储异常
+    @Override
+    public void failed(@NotNull K id, @NotNull String keyId, @Nullable String entry, @NotNull Throwable error) {
+        Map<Target, Node> targets = this.entities.get(id);
+        if (targets == null) return;
+        Node node = targets.get(new Target(keyId, entry));
+        if (node != null) {
+            node.fail(error instanceof CompletionException completion ? completion.getCause() : error);
+        }
+    }
+
+    // 先登记再让快照加载, 加载完成时的 touch 一定能找到这个节点. 节点第一次建出来时记下当前看到的值, 之后变了才通知.
+    // 登记之后已经能读到值时 ready 当场完成, 否则由首次读到值的 refresh 完成
     @NotNull
     private Watch watch(@NotNull K id, @NotNull Source source, @NotNull Runnable onChange) {
         Target target = new Target(source.keyId, source.entry);
         Binding binding = new Binding(id, target, onChange);
         this.entities.compute(id, (ignored, targets) -> {
             Map<Target, Node> watched = targets == null ? new ConcurrentHashMap<>() : targets;
-            watched.computeIfAbsent(target, created -> new Node(source)).bindings.add(binding);
+            watched.computeIfAbsent(target, created -> new Node(source)).attach(binding);
             return watched;
         });
+        if (binding.node.visible()) {
+            binding.ready.complete(null);
+        }
         source.load();
         return binding;
     }
@@ -188,21 +208,52 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             this.seen = source.observe();
         }
 
-        // 取值和比较在锁里, 并发的 touch 按顺序推进 seen; 回调在锁外
+        // 在外层的 compute 里调用, 节点这时一定还在表里
+        private void attach(@NotNull Binding binding) {
+            this.bindings.add(binding);
+            binding.node = this;
+        }
+
+        private synchronized boolean visible() {
+            return this.seen != UNLOADED;
+        }
+
+        // 取值和比较在锁里, 并发的 touch 按顺序推进 seen; 回调在锁外. 第一次读到值时先让 ready 完成, 再通知
         private void refresh() {
             List<Binding> listeners;
+            boolean first;
             synchronized (this) {
                 Object current = this.source.observe();
                 // 快照还没加载时不通知, 持有方刚下线时能看到的值不会先变成空
                 if (current == UNLOADED || same(this.seen, current)) return;
+                first = this.seen == UNLOADED;
                 this.seen = current;
                 listeners = List.copyOf(this.bindings);
             }
-            for (int i = 0, size = listeners.size(); i < size; i++) {
+            int size = listeners.size();
+            if (first) {
+                for (int i = 0; i < size; i++) {
+                    listeners.get(i).ready.complete(null);
+                }
+            }
+            for (int i = 0; i < size; i++) {
                 Binding binding = listeners.get(i);
                 if (!binding.closed.get()) {
                     binding.notifyChange();
                 }
+            }
+        }
+
+        // 首次加载失败时让还在等的 ready 失败. 已经读到过值时不受影响, 之后新加的 watch 会再发起一次加载
+        private void fail(@NotNull Throwable error) {
+            List<Binding> waiting;
+            synchronized (this) {
+                if (this.seen != UNLOADED) return;
+                waiting = List.copyOf(this.bindings);
+            }
+            int size = waiting.size();
+            for (int i = 0; i < size; i++) {
+                waiting.get(i).ready.completeExceptionally(error);
             }
         }
     }
@@ -212,6 +263,8 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         private final Target target;
         private final Runnable onChange;
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final CompletableFuture<Void> ready = new CompletableFuture<>();
+        private Node node;
 
         private Binding(@NotNull K id, @NotNull Target target, @NotNull Runnable onChange) {
             this.id = id;
@@ -219,11 +272,23 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             this.onChange = onChange;
         }
 
+        @NotNull
+        @Override
+        public CompletableFuture<Void> ready() {
+            return this.ready;
+        }
+
         @Override
         public void close() {
             if (this.closed.compareAndSet(false, true)) {
                 WatchHub.this.unwatch(this);
+                this.cancel("Watch was closed before it was ready");
             }
+        }
+
+        // ready 已经完成时没有效果. CancellationException 带上原因, isCancelled 照样为 true
+        private void cancel(@NotNull String reason) {
+            this.ready.completeExceptionally(new CancellationException(reason));
         }
 
         // 回调来自宿主, 它的异常在这里记日志, 不影响其他 watch 和触发改动的调用方
