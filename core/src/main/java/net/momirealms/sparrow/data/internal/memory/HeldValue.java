@@ -40,16 +40,19 @@ public final class HeldValue<T> {
         this.set(this.form.load(stored));
     }
 
-    // 脏的话清掉标记, 把这一刻的值编码进这次落库. 可选键的 Optional.empty() 没有要存的值, 落库时删除
-    public void takeDirty(@NotNull List<SaveBatch.Write> writes, @NotNull List<SaveBatch.Remove> removes) {
+    // 脏的话清掉标记, 取出这一刻的值, 编码留到出锁以后. 可选键的 Optional.empty() 没有要存的值, 落库时删除
+    public void takeDirty(@NotNull List<HeldEntity.Dirty> taken) {
         if (!this.dirty) return;
         this.dirty = false;
-        StoredValue stored = this.form.store(this.value);
-        if (stored == null) {
-            removes.add(new SaveBatch.Remove(this.key, null));
-        } else {
-            writes.add(new SaveBatch.Write(this.key, null, stored));
-        }
+        T value = this.value;
+        taken.add((writes, removes) -> {
+            StoredValue stored = this.form.store(value);
+            if (stored == null) {
+                removes.add(new SaveBatch.Remove(this.key, null));
+            } else {
+                writes.add(new SaveBatch.Write(this.key, null, stored));
+            }
+        });
     }
 
     // publish 用的当前值, null 表示没有值

@@ -84,16 +84,23 @@ public final class HeldEntries<E, V> {
         return value;
     }
 
-    // 清掉脏标记, 把脏条目这一刻的值和删掉的条目编码进这次落库
-    public void takeDirty(@NotNull List<SaveBatch.Write> writes, @NotNull List<SaveBatch.Remove> removes) {
+    // 清掉脏标记, 取出脏条目这一刻的值和删掉的条目, 编码留到出锁以后
+    public void takeDirty(@NotNull List<HeldEntity.Dirty> taken) {
+        if (this.dirty.isEmpty() && this.removed.isEmpty()) return;
+        Map<String, V> written = HashMap.newHashMap(this.dirty.size());
         for (String entry : this.dirty) {
-            writes.add(new SaveBatch.Write(this.key, entry, this.form.store(this.entries.get(entry))));
+            written.put(entry, this.entries.get(entry));
         }
-        for (String entry : this.removed) {
-            removes.add(new SaveBatch.Remove(this.key, entry));
-        }
+        List<String> deleted = List.copyOf(this.removed);
         this.dirty.clear();
         this.removed.clear();
+        taken.add((writes, removes) -> {
+            written.forEach((entry, value) -> writes.add(new SaveBatch.Write(this.key, entry, this.form.store(value))));
+            int deletedCount = deleted.size();
+            for (int i = 0; i < deletedCount; i++) {
+                removes.add(new SaveBatch.Remove(this.key, deleted.get(i)));
+            }
+        });
     }
 
     // publish 用, 在锁里调用, 编码全部条目

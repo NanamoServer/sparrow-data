@@ -67,9 +67,11 @@ public final class TransactionImpl implements Transaction {
     public <K, T> T update(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @NotNull UnaryOperator<T> operator) {
         EntityImpl<K> target = (EntityImpl<K>) entity;
         DbKeyImpl<K, T> impl = (DbKeyImpl<K, T>) key;
-        T value = DbOperations.updateValue(this.attempt, target.ref(), impl, operator);
-        this.changed(target, impl.storageKey(), null);
-        return value;
+        DbOperations.Update<T> update = DbOperations.updateValue(this.attempt, target.ref(), impl, operator);
+        if (update.changed()) {
+            this.changed(target, impl.storageKey(), null);
+        }
+        return update.value();
     }
 
     @Override
@@ -115,11 +117,12 @@ public final class TransactionImpl implements Transaction {
         EntityImpl<K> target = (EntityImpl<K>) entity;
         DbMapKeyImpl<K, E, V> impl = (DbMapKeyImpl<K, E, V>) key;
         String encoded = impl.entryCodec().encode(entry);
-        V value = DbOperations.updateEntry(this.attempt, target.ref(), impl, encoded, operator);
-        if (value != null) {
+        DbOperations.Update<V> update = DbOperations.updateEntry(this.attempt, target.ref(), impl, encoded, operator);
+        if (update == null) return null;
+        if (update.changed()) {
             this.changed(target, impl.storageKey(), encoded);
         }
-        return value;
+        return update.value();
     }
 
     @Override

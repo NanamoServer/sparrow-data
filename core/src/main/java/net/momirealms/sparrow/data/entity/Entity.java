@@ -28,6 +28,7 @@ public interface Entity<K> {
 
     boolean isHeld();
 
+    // 读到的值由持有容器和快照共享, 不能原地修改, BYTES 读出的数组也一样. 要改就在 update 或 compute 里返回新值
     @NotNull
     <T> T get(@NotNull MemoryKey<K, T> key);
 

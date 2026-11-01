@@ -159,7 +159,8 @@ public final class MariaDbEntityStorage implements EntityStorage {
         }
     }
 
-    // 关闭自动提交执行 body, 正常返回就提交, 抛异常就回滚. 还给连接池之前恢复自动提交, 连接的状态和借出时一样
+    // 关闭自动提交执行 body, 正常返回就提交, 抛出任何 Throwable 都回滚. 还给连接池之前恢复自动提交, 连接的状态和借出时一样.
+    // 恢复自动提交会把还没结束的事务提交掉, 所以 Error 和被偷偷抛出的受检异常也要先回滚
     private <T> T inTransaction(@NotNull Function<MariaDbConnectionStorage, T> body) {
         try (Connection connection = this.dataSource.getConnection()) {
             connection.setAutoCommit(false);
@@ -167,9 +168,9 @@ public final class MariaDbEntityStorage implements EntityStorage {
                 T result = body.apply(new MariaDbConnectionStorage(connection, this.tablePrefix, this.tablesByType, true));
                 connection.commit();
                 return result;
-            } catch (SQLException | RuntimeException exception) {
+            } catch (Throwable throwable) {
                 connection.rollback();
-                throw exception;
+                throw throwable;
             } finally {
                 connection.setAutoCommit(true);
             }

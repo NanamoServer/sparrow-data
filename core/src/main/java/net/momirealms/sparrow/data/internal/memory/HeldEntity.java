@@ -195,34 +195,38 @@ public final class HeldEntity<K> {
     }
 
     private void saveDirty() {
-        List<SaveBatch.Write> writes = new ArrayList<>();
-        List<SaveBatch.Remove> removes = new ArrayList<>();
+        List<Dirty> taken = new ArrayList<>();
         synchronized (this) {
             for (HeldValue<?> slot : this.values.values()) {
-                slot.takeDirty(writes, removes);
+                slot.takeDirty(taken);
             }
             for (HeldEntries<?, ?> slot : this.entries.values()) {
-                slot.takeDirty(writes, removes);
+                slot.takeDirty(taken);
             }
         }
-        this.store(writes, removes);
+        this.store(taken);
     }
 
     private void saveDetached(@NotNull AbstractDataKey<K> key) {
-        List<SaveBatch.Write> writes = new ArrayList<>();
-        List<SaveBatch.Remove> removes = new ArrayList<>();
+        List<Dirty> taken = new ArrayList<>();
         synchronized (this) {
             HeldValue<?> value = this.values.remove(key);
             HeldEntries<?, ?> entries = this.entries.remove(key);
-            if (value != null) value.takeDirty(writes, removes);
-            if (entries != null) entries.takeDirty(writes, removes);
+            if (value != null) value.takeDirty(taken);
+            if (entries != null) entries.takeDirty(taken);
         }
-        this.store(writes, removes);
+        this.store(taken);
     }
 
-    // 落库之后广播写到的每个键的失效, 映射键按整个键发, 观察方重读库
-    private void store(@NotNull List<SaveBatch.Write> writes, @NotNull List<SaveBatch.Remove> removes) {
-        if (writes.isEmpty() && removes.isEmpty()) return;
+    // 在锁外编码取出的脏数据, 主线程的修改不用等编码. 落库之后广播写到的每个键的失效, 映射键按整个键发, 观察方重读库
+    private void store(@NotNull List<Dirty> taken) {
+        if (taken.isEmpty()) return;
+        List<SaveBatch.Write> writes = new ArrayList<>();
+        List<SaveBatch.Remove> removes = new ArrayList<>();
+        int takenCount = taken.size();
+        for (int i = 0; i < takenCount; i++) {
+            taken.get(i).encode(writes, removes);
+        }
         this.service.storage().save(this.ref, new SaveBatch(writes, removes));
         Set<String> keyIds = new HashSet<>();
         int writeCount = writes.size();
@@ -277,6 +281,13 @@ public final class HeldEntity<K> {
         Map<String, V> entries = HashMap.newHashMap(stored.size());
         stored.forEach((entry, value) -> entries.put(entry, form.load(value)));
         return new HeldEntries<>(key.storageKey(), key.entryCodec(), form, entries);
+    }
+
+    // 一个槽在锁里取出的脏数据, 出锁以后再编码. 值都是不可变对象, 晚一点编码得到的字节一样
+    @FunctionalInterface
+    interface Dirty {
+
+        void encode(@NotNull List<SaveBatch.Write> writes, @NotNull List<SaveBatch.Remove> removes);
     }
 
     // 解码好的槽, 还没放进容器

@@ -15,7 +15,8 @@ public interface ValueCodec<T> {
 
     // 键的值和字节之间的转换, 内置的常用类型在 ValueCodecs 里. 同一个值每次都要编出同样的字节, decode(encode(value)) 要和 value 相等.
     // encode 返回的数组交给数据层后不要再改; decode 收到的数组数据层还要拿来做 CAS 比较, 返回的值不能直接引用它.
-    // 字节不对时 decode 抛异常
+    // 字节不对时 decode 抛异常. encode 和 decode 可能在 Redis 的订阅线程或宿主的 Executor 上运行, 要快, 并且线程安全.
+    // 解码出来的值由持有容器和快照共享给所有读取方, 只能当作不可变对象使用, BYTES 解码出的数组也一样
     byte @NotNull [] encode(@NotNull T value);
 
     @NotNull
