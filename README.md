@@ -124,7 +124,7 @@ player.rankOf(coins, uuid);
 ```
 
 - `update` is a CAS loop on the stored bytes, so its operator may run several times and must be free of side effects. An update that encodes to the same bytes neither writes nor broadcasts.
-- A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. Invalidations are broadcast only after commit.
+- A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. After commit, the values the transaction wrote are put into this server's existing snapshots first, then invalidations are broadcast; a rolled back transaction touches neither.
 - Counters treat a missing value or entry as 0. `take` fails without writing when the balance is too low.
 - `top` and `rankOf` read the ranking table. Memory keys reach it when they are saved, so their ranking lags by up to one save interval.
 
