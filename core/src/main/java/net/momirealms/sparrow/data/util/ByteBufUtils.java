@@ -1,7 +1,7 @@
 package net.momirealms.sparrow.data.util;
 
 import io.netty.buffer.ByteBuf;
-import net.momirealms.sparrow.redis.messagebroker.util.ByteBufHelper;
+import net.momirealms.sparrow.message.util.ByteBufHelper;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

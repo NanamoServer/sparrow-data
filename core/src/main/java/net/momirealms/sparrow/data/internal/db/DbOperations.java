@@ -30,11 +30,11 @@ public final class DbOperations<K> {
     private final EntityTypeImpl<K> type;
     private final EntityStorage storage;
     private final Executor executor;
-    private final DataMessenger<?> messenger;
+    private final DataMessenger messenger;
 
     // 一个实体类型的 DB 权威读写. 实体 ID 在调用线程上编码, ID 超长时异常直接抛给调用方;
     // 存储在宿主的 Executor 上同步调用, 写完后先用写进去的值更新本服快照, 再广播失效
-    public DbOperations(@NotNull EntityTypeImpl<K> type, @NotNull EntityStorage storage, @NotNull Executor executor, @NotNull DataMessenger<?> messenger) {
+    public DbOperations(@NotNull EntityTypeImpl<K> type, @NotNull EntityStorage storage, @NotNull Executor executor, @NotNull DataMessenger messenger) {
         this.type = type;
         this.storage = storage;
         this.executor = executor;

@@ -1,9 +1,8 @@
 package net.momirealms.sparrow.data;
 
-import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.data.internal.DataServiceImpl;
 import net.momirealms.sparrow.data.storage.EntityStorage;
-import net.momirealms.sparrow.redis.messagebroker.MessageBroker;
+import net.momirealms.sparrow.message.MessageBroker;
 import org.jetbrains.annotations.NotNull;
 
 import java.time.Duration;
@@ -27,7 +26,7 @@ public final class SparrowDataService {
 
         private EntityStorage storage;
         private Executor executor;
-        private MessageBroker<? extends ByteBuf> messageBroker;
+        private MessageBroker messageBroker;
         private Duration saveInterval;
         private Duration snapshotExpiry = DEFAULT_SNAPSHOT_EXPIRY;
 
@@ -48,7 +47,7 @@ public final class SparrowDataService {
         }
 
         @NotNull
-        public Builder messageBroker(@NotNull MessageBroker<? extends ByteBuf> messageBroker) {
+        public Builder messageBroker(@NotNull MessageBroker messageBroker) {
             this.messageBroker = messageBroker;
             return this;
         }

@@ -1,9 +1,8 @@
 package net.momirealms.sparrow.data.internal.sync;
 
-import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.data.storage.StoredValue;
-import net.momirealms.sparrow.redis.messagebroker.MessageBroker;
-import net.momirealms.sparrow.redis.messagebroker.RedisMessage;
+import net.momirealms.sparrow.message.MessageBroker;
+import net.momirealms.sparrow.message.codec.MessageCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -12,28 +11,25 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @ApiStatus.Internal
-public final class DataMessenger<B extends ByteBuf> {
+public final class DataMessenger {
     static final String NAMESPACE = "sparrow_data";
     static final int MAX_TEXT_LENGTH = 32767;
     static final int MAX_ENTITY_ID_LENGTH = 64;
-    private static final String BROADCAST = "";
 
-    private final MessageBroker<B> broker;
+    private final MessageBroker broker;
     private final Map<String, Listener> listeners = new ConcurrentHashMap<>();
 
-    private DataMessenger(@NotNull MessageBroker<B> broker) {
+    private DataMessenger(@NotNull MessageBroker broker) {
         this.broker = broker;
     }
 
-    // 在宿主的 broker 上注册失效, 覆盖和 publish 消息. 宿主传入的是 MessageBroker<? extends ByteBuf>, 调用这个泛型方法时通配符被捕获成 B,
-    // 消息类和编解码器都按 B 写就能注册上去. broker 按注册顺序给消息编号, 所以同一个频道上的服务器都要在同样的位置注册,
-    // 并且在 broker.subscribe() 之前注册
+    // 同一频道按固定顺序注册数据消息, 注册须在订阅之前完成.
     @NotNull
-    public static <B extends ByteBuf> DataMessenger<B> register(@NotNull MessageBroker<B> broker) {
-        DataMessenger<B> messenger = new DataMessenger<>(broker);
-        broker.registry().register(InvalidateMessage.ID, RedisMessage.codec(InvalidateMessage::write, buf -> new InvalidateMessage<>(messenger, buf)));
-        broker.registry().register(OverrideMessage.ID, RedisMessage.codec(OverrideMessage::write, buf -> new OverrideMessage<>(messenger, buf)));
-        broker.registry().register(PublishMessage.ID, RedisMessage.codec(PublishMessage::write, buf -> new PublishMessage<>(messenger, buf)));
+    public static DataMessenger register(@NotNull MessageBroker broker) {
+        DataMessenger messenger = new DataMessenger(broker);
+        broker.registry().register(InvalidateMessage.ID, MessageCodec.of(InvalidateMessage::write, buf -> new InvalidateMessage(messenger, buf)));
+        broker.registry().register(OverrideMessage.ID, MessageCodec.of(OverrideMessage::write, buf -> new OverrideMessage(messenger, buf)));
+        broker.registry().register(PublishMessage.ID, MessageCodec.of(PublishMessage::write, buf -> new PublishMessage(messenger, buf)));
         return messenger;
     }
 
@@ -48,38 +44,38 @@ public final class DataMessenger<B extends ByteBuf> {
 
     // 广播给所有服务器, 包括本服自己. 范围的含义见 InvalidateMessage 的构造器
     public void invalidate(@NotNull String entityType, byte @Nullable [] entityId, @Nullable String keyId, @Nullable String entry) {
-        this.broker.publishOneWay(new InvalidateMessage<>(this, entityType, entityId, keyId, entry), BROADCAST);
+        this.broker.publishAll(new InvalidateMessage(this, entityType, entityId, keyId, entry));
     }
 
     public void override(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
-        this.broker.publishOneWay(new OverrideMessage<>(this, entityType, entityId, keyId, entry, value), BROADCAST);
+        this.broker.publishAll(new OverrideMessage(this, entityType, entityId, keyId, entry, value));
     }
 
     // value 为空表示 publish 的是"没有值"
     public void publishValue(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
-        this.broker.publishOneWay(new PublishMessage<>(this, entityType, entityId, keyId, value, null), BROADCAST);
+        this.broker.publishAll(new PublishMessage(this, entityType, entityId, keyId, value, null));
     }
 
     public void publishEntries(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries) {
-        this.broker.publishOneWay(new PublishMessage<>(this, entityType, entityId, keyId, null, entries), BROADCAST);
+        this.broker.publishAll(new PublishMessage(this, entityType, entityId, keyId, null, entries));
     }
 
     // broker 在 Redis 的订阅线程上调用. 这里只按实体类型找到监听者, 本服没有这个实体类型时忽略
-    void receive(@NotNull InvalidateMessage<B> message) {
+    void receive(@NotNull InvalidateMessage message) {
         Listener listener = this.listeners.get(message.entityType());
         if (listener != null) {
             listener.invalidate(message.entityId(), message.keyId(), message.entry());
         }
     }
 
-    void receive(@NotNull OverrideMessage<B> message) {
+    void receive(@NotNull OverrideMessage message) {
         Listener listener = this.listeners.get(message.entityType());
         if (listener != null) {
             listener.override(message.entityId(), message.keyId(), message.entry(), message.value());
         }
     }
 
-    void receive(@NotNull PublishMessage<B> message) {
+    void receive(@NotNull PublishMessage message) {
         Listener listener = this.listeners.get(message.entityType());
         if (listener == null) return;
         Map<String, StoredValue> entries = message.entries();

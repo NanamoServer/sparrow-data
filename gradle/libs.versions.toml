@@ -1,29 +1,16 @@
 [versions]
-project-version = "0.2"
-
-# Platform
-jetbrains-annotations = "26.0.2-1"
-
-# Common
-caffeine = "3.2.3"
-slf4j = "2.0.17"
-
-# Sparrow
-sparrow-redis-message-broker = "0.0.7"
-
-# Storage
-netty = "4.2.7.Final"
+project-version = "0.3"
 
 [libraries]
 # Platform
-jetbrains-annotations = { module = "org.jetbrains:annotations", version.ref = "jetbrains-annotations" }
+jetbrains-annotations = { module = "org.jetbrains:annotations", version = "26.0.2-1" }
 
 # Common
-caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
-slf4j = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version = "3.2.3" }
+slf4j = { module = "org.slf4j:slf4j-api", version = "2.0.17" }
 
 # Sparrow
-sparrow-redis-message-broker = { module = "net.momirealms:sparrow-redis-message-broker", version.ref = "sparrow-redis-message-broker" }
+sparrow-message = { module = "net.momirealms:sparrow-message", version = "26.11.1" }
 
 # Storage
-netty-buffer = { module = "io.netty:netty-buffer", version.ref = "netty" }
+netty-buffer = { module = "io.netty:netty-buffer", version = "4.2.7.Final" }
