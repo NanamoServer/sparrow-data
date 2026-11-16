@@ -1,5 +1,6 @@
 package net.momirealms.sparrow.data.internal;
 
+import net.momirealms.sparrow.data.DoubleRankEntry;
 import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.entity.Entity;
@@ -15,6 +16,8 @@ import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbCounterKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.key.builder.MemoryDoubleKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.key.builder.MemoryIntKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.RosterKeyBuilderImpl;
@@ -30,17 +33,22 @@ import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.SortableKey;
+import net.momirealms.sparrow.data.key.SortableMemoryDoubleKey;
 import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryDoubleKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryIntKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
+import net.momirealms.sparrow.data.storage.DoubleRankRow;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.data.storage.RankRow;
+import net.momirealms.sparrow.data.storage.StorageKey;
 import net.momirealms.sparrow.data.storage.StoredValue;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -116,8 +124,20 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
+    public MemoryIntKeyBuilder<K> memoryInt(@NotNull Key id) {
+        return new MemoryIntKeyBuilderImpl<>(this, id);
+    }
+
+    @NotNull
+    @Override
     public MemoryLongKeyBuilder<K> memoryLong(@NotNull Key id) {
         return new MemoryLongKeyBuilderImpl<>(this, id);
+    }
+
+    @NotNull
+    @Override
+    public MemoryDoubleKeyBuilder<K> memoryDouble(@NotNull Key id) {
+        return new MemoryDoubleKeyBuilderImpl<>(this, id);
     }
 
     @NotNull
@@ -210,9 +230,9 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     @NotNull
     @Override
     public CompletableFuture<List<RankEntry<K>>> top(@NotNull SortableKey<K> key, int offset, int limit) {
-        ValueKeyImpl<K, Long> impl = (ValueKeyImpl<K, Long>) key;
+        StorageKey storageKey = ((AbstractDataKey<K>) key).storageKey();
         return CompletableFuture.supplyAsync(() -> {
-            List<RankRow> rows = this.service.storage().top(this.name, impl.storageKey(), offset, limit);
+            List<RankRow> rows = this.service.storage().top(this.name, storageKey, offset, limit);
             int size = rows.size();
             List<RankEntry<K>> entries = new ArrayList<>(size);
             for (int i = 0; i < size; i++) {
@@ -223,16 +243,36 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         }, this.service.executor());
     }
 
-    // 先拿到这个实体的数值, 存储里没有就用默认值, 所以从没落过库的实体也有名次. 名次是比它大的实体个数加一, 数值相同的名次相同
+    @NotNull
+    @Override
+    public CompletableFuture<List<DoubleRankEntry<K>>> top(@NotNull SortableMemoryDoubleKey<K> key, int offset, int limit) {
+        StorageKey storageKey = ((AbstractDataKey<K>) key).storageKey();
+        return CompletableFuture.supplyAsync(() -> {
+            List<DoubleRankRow> rows = this.service.storage().topDouble(this.name, storageKey, offset, limit);
+            int size = rows.size();
+            List<DoubleRankEntry<K>> entries = new ArrayList<>(size);
+            for (int i = 0; i < size; i++) {
+                DoubleRankRow row = rows.get(i);
+                entries.add(new DoubleRankEntry<>(this.idCodec.decode(row.entityId()), row.value()));
+            }
+            return entries;
+        }, this.service.executor());
+    }
+
+    // 先拿到这个实体的数值, 存储里没有就用默认值, 所以从没落过库的实体也有名次. 名次是比它大的实体个数加一, 数值相同的名次相同.
+    // 可排行的键都是数值键, 浮点键的值在另一列, 按 double 比较
     @NotNull
     @Override
     public CompletableFuture<Long> rankOf(@NotNull SortableKey<K> key, @NotNull K id) {
-        ValueKeyImpl<K, Long> impl = (ValueKeyImpl<K, Long>) key;
+        ValueKeyImpl<K, ?> impl = (ValueKeyImpl<K, ?>) key;
+        ValueForm.NumberForm<?> form = (ValueForm.NumberForm<?>) impl.form();
+        StorageKey storageKey = impl.storageKey();
         EntityRef ref = this.ref(id);
         return CompletableFuture.supplyAsync(() -> {
             EntityStorage storage = this.service.storage();
-            long value = impl.form().load(storage.read(ref, impl.storageKey()));
-            return storage.countAbove(this.name, impl.storageKey(), value) + 1;
+            long bits = form.loadBits(storage.read(ref, storageKey));
+            if (form instanceof ValueForm.DoubleForm) return storage.countAboveDouble(this.name, storageKey, Double.longBitsToDouble(bits)) + 1;
+            return storage.countAbove(this.name, storageKey, bits) + 1;
         }, this.service.executor());
     }
 

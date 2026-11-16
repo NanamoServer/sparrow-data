@@ -3,7 +3,10 @@ package net.momirealms.sparrow.data.entity;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
+import net.momirealms.sparrow.data.key.MemoryDoubleKey;
+import net.momirealms.sparrow.data.key.MemoryIntKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
+import net.momirealms.sparrow.data.key.MemoryLongKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
@@ -12,6 +15,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.DoubleUnaryOperator;
+import java.util.function.IntUnaryOperator;
+import java.util.function.LongUnaryOperator;
 import java.util.function.UnaryOperator;
 
 /** 实体句柄, 由类型和 ID 组成, 不带状态, 随时可以取. 能调用哪些方法由传入的键决定. */
@@ -34,6 +40,35 @@ public interface Entity<K> {
 
     // operator 返回 null 同样是删除存储的值
     <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator);
+
+    // int, long, double 三种内存键的读写不装箱. get 和 write 是下面这几个重载, 传这三种键时编译器会自动选中它们;
+    // 读改写不能重载, 用 add 或者带类型后缀的 update. 只能在持有这个实体的服上调用
+    int get(@NotNull MemoryIntKey<K> key);
+
+    void write(@NotNull MemoryIntKey<K> key, int value);
+
+    // 原子加减, 返回新值
+    int add(@NotNull MemoryIntKey<K> key, int delta);
+
+    int updateInt(@NotNull MemoryIntKey<K> key, @NotNull IntUnaryOperator operator);
+
+    long get(@NotNull MemoryLongKey<K> key);
+
+    void write(@NotNull MemoryLongKey<K> key, long value);
+
+    // 原子加减, 返回新值
+    long add(@NotNull MemoryLongKey<K> key, long delta);
+
+    long updateLong(@NotNull MemoryLongKey<K> key, @NotNull LongUnaryOperator operator);
+
+    double get(@NotNull MemoryDoubleKey<K> key);
+
+    void write(@NotNull MemoryDoubleKey<K> key, double value);
+
+    // 原子加减, 返回新值
+    double add(@NotNull MemoryDoubleKey<K> key, double delta);
+
+    double updateDouble(@NotNull MemoryDoubleKey<K> key, @NotNull DoubleUnaryOperator operator);
 
     void publish(@NotNull MemoryDataKey<K> key);
 

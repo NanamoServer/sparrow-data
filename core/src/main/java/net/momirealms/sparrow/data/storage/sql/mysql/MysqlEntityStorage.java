@@ -1,5 +1,6 @@
 package net.momirealms.sparrow.data.storage.sql.mysql;
 
+import net.momirealms.sparrow.data.storage.DoubleRankRow;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.data.storage.RankRow;
@@ -110,6 +111,17 @@ public final class MysqlEntityStorage implements EntityStorage {
     @Override
     public long countAbove(@NotNull String entityType, @NotNull StorageKey key, long value) {
         return this.withConnection(storage -> storage.countAbove(entityType, key, value));
+    }
+
+    @NotNull
+    @Override
+    public List<DoubleRankRow> topDouble(@NotNull String entityType, @NotNull StorageKey key, int offset, int limit) {
+        return this.withConnection(storage -> storage.topDouble(entityType, key, offset, limit));
+    }
+
+    @Override
+    public long countAboveDouble(@NotNull String entityType, @NotNull StorageKey key, double value) {
+        return this.withConnection(storage -> storage.countAboveDouble(entityType, key, value));
     }
 
     @Override

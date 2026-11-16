@@ -40,21 +40,127 @@ public sealed interface ValueForm<T> {
         }
     }
 
-    // memoryLong 键和计数键, 值直接以 long 存储
-    record LongForm(long fallback) implements ValueForm<Long> {
-        public static final LongForm ZERO = new LongForm(0L);
+    // int, long, double 三种数值键. 持有容器里这种键的值放在一个 long 里, 读写不装箱: int 和 long 就是数值本身, double 是它的位模式.
+    // 装箱的 T 只在通用的读写路径上出现, 例如覆盖, 快照和 watch
+    sealed interface NumberForm<T> extends ValueForm<T> {
+
+        long fallbackBits();
+
+        long toBits(@NotNull T value);
+
+        @NotNull
+        T fromBits(long bits);
+
+        @NotNull
+        StoredValue storeBits(long bits);
+
+        // stored 为 null 时是默认值
+        long loadBits(@Nullable StoredValue stored);
 
         @Nullable
         @Override
-        public StoredValue store(@Nullable Long value) {
-            return value == null ? null : new StoredValue.OfLong(value);
+        default StoredValue store(@Nullable T value) {
+            return value == null ? null : this.storeBits(this.toBits(value));
         }
 
         @NotNull
         @Override
-        public Long load(@Nullable StoredValue stored) {
-            if (stored == null) return this.fallback;
-            return ((StoredValue.OfLong) stored).value();
+        default T load(@Nullable StoredValue stored) {
+            return this.fromBits(this.loadBits(stored));
+        }
+    }
+
+    // memoryInt 键, 存储里和 long 一样放在 num 列
+    record IntForm(int fallback) implements NumberForm<Integer> {
+
+        @Override
+        public long fallbackBits() {
+            return this.fallback;
+        }
+
+        @Override
+        public long toBits(@NotNull Integer value) {
+            return value;
+        }
+
+        @NotNull
+        @Override
+        public Integer fromBits(long bits) {
+            return (int) bits;
+        }
+
+        @NotNull
+        @Override
+        public StoredValue storeBits(long bits) {
+            return new StoredValue.OfLong(bits);
+        }
+
+        @Override
+        public long loadBits(@Nullable StoredValue stored) {
+            return stored == null ? this.fallback : ((StoredValue.OfLong) stored).value();
+        }
+    }
+
+    // memoryLong 键和计数键
+    record LongForm(long fallback) implements NumberForm<Long> {
+        public static final LongForm ZERO = new LongForm(0L);
+
+        @Override
+        public long fallbackBits() {
+            return this.fallback;
+        }
+
+        @Override
+        public long toBits(@NotNull Long value) {
+            return value;
+        }
+
+        @NotNull
+        @Override
+        public Long fromBits(long bits) {
+            return bits;
+        }
+
+        @NotNull
+        @Override
+        public StoredValue storeBits(long bits) {
+            return new StoredValue.OfLong(bits);
+        }
+
+        @Override
+        public long loadBits(@Nullable StoredValue stored) {
+            return stored == null ? this.fallback : ((StoredValue.OfLong) stored).value();
+        }
+    }
+
+    // memoryDouble 键, 存储里放在 dbl 列
+    record DoubleForm(double fallback) implements NumberForm<Double> {
+
+        @Override
+        public long fallbackBits() {
+            return Double.doubleToRawLongBits(this.fallback);
+        }
+
+        @Override
+        public long toBits(@NotNull Double value) {
+            return Double.doubleToRawLongBits(value);
+        }
+
+        @NotNull
+        @Override
+        public Double fromBits(long bits) {
+            return Double.longBitsToDouble(bits);
+        }
+
+        @NotNull
+        @Override
+        public StoredValue storeBits(long bits) {
+            return new StoredValue.OfDouble(Double.longBitsToDouble(bits));
+        }
+
+        @Override
+        public long loadBits(@Nullable StoredValue stored) {
+            return Double.doubleToRawLongBits(stored == null ? this.fallback : ((StoredValue.OfDouble) stored).value());
         }
     }
 }

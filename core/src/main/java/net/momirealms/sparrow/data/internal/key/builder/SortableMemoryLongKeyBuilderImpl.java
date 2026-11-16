@@ -2,9 +2,9 @@ package net.momirealms.sparrow.data.internal.key.builder;
 
 import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.internal.EntityTypeImpl;
-import net.momirealms.sparrow.data.internal.key.SortableMemoryKeyImpl;
+import net.momirealms.sparrow.data.internal.key.SortableMemoryLongKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
-import net.momirealms.sparrow.data.key.SortableMemoryKey;
+import net.momirealms.sparrow.data.key.SortableMemoryLongKey;
 import net.momirealms.sparrow.data.key.builder.SortableMemoryLongKeyBuilder;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -41,8 +41,8 @@ public final class SortableMemoryLongKeyBuilderImpl<K> implements SortableMemory
 
     @NotNull
     @Override
-    public CompletableFuture<SortableMemoryKey<K>> register() {
-        SortableMemoryKeyImpl<K> key = new SortableMemoryKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue), this.scale);
+    public CompletableFuture<SortableMemoryLongKey<K>> register() {
+        SortableMemoryLongKeyImpl<K> key = new SortableMemoryLongKeyImpl<>(this.id, this.type, new ValueForm.LongForm(this.defaultValue), this.scale);
         return this.type.backfill().register(key).thenApply(ignored -> key);
     }
 }

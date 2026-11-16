@@ -14,7 +14,10 @@ import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
+import net.momirealms.sparrow.data.key.MemoryDoubleKey;
+import net.momirealms.sparrow.data.key.MemoryIntKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
+import net.momirealms.sparrow.data.key.MemoryLongKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
@@ -25,6 +28,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.DoubleUnaryOperator;
+import java.util.function.IntUnaryOperator;
+import java.util.function.LongUnaryOperator;
 import java.util.function.UnaryOperator;
 
 @ApiStatus.Internal
@@ -59,6 +65,90 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         T value = this.requireHeld().update(impl, operator);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public int get(@NotNull MemoryIntKey<K> key) {
+        return (int) this.requireHeld().bits((AbstractDataKey<K>) key);
+    }
+
+    @Override
+    public void write(@NotNull MemoryIntKey<K> key, int value) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        this.requireHeld().setBits(impl, value);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+    }
+
+    @Override
+    public int add(@NotNull MemoryIntKey<K> key, int delta) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        int value = this.requireHeld().addInt(impl, delta);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public int updateInt(@NotNull MemoryIntKey<K> key, @NotNull IntUnaryOperator operator) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        int value = this.requireHeld().updateInt(impl, operator);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public long get(@NotNull MemoryLongKey<K> key) {
+        return this.requireHeld().bits((AbstractDataKey<K>) key);
+    }
+
+    @Override
+    public void write(@NotNull MemoryLongKey<K> key, long value) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        this.requireHeld().setBits(impl, value);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+    }
+
+    @Override
+    public long add(@NotNull MemoryLongKey<K> key, long delta) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        long value = this.requireHeld().addLong(impl, delta);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public long updateLong(@NotNull MemoryLongKey<K> key, @NotNull LongUnaryOperator operator) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        long value = this.requireHeld().updateLong(impl, operator);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public double get(@NotNull MemoryDoubleKey<K> key) {
+        return Double.longBitsToDouble(this.requireHeld().bits((AbstractDataKey<K>) key));
+    }
+
+    @Override
+    public void write(@NotNull MemoryDoubleKey<K> key, double value) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        this.requireHeld().setBits(impl, Double.doubleToRawLongBits(value));
+        this.type.watches().touch(this.id, impl.storageKey().id());
+    }
+
+    @Override
+    public double add(@NotNull MemoryDoubleKey<K> key, double delta) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        double value = this.requireHeld().addDouble(impl, delta);
+        this.type.watches().touch(this.id, impl.storageKey().id());
+        return value;
+    }
+
+    @Override
+    public double updateDouble(@NotNull MemoryDoubleKey<K> key, @NotNull DoubleUnaryOperator operator) {
+        AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
+        double value = this.requireHeld().updateDouble(impl, operator);
         this.type.watches().touch(this.id, impl.storageKey().id());
         return value;
     }

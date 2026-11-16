@@ -75,17 +75,17 @@ Entity<UUID> entity = player.entity(uuid);   // 只是一个地址, 随时可以
 
 ```java
 // 注册. 返回 future, 运行中注册时要等已在线的实体补读完这个键
-MemoryKey<UUID, Integer> MANA = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();          // 默认值 100
+MemoryKey<UUID, String> LOCALE = player.memory(Key.sparrow("locale"), ValueCodecs.STRING, "zh_cn").register().join(); // 默认值 zh_cn
 MemoryKey<UUID, @Nullable String> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // 不给默认值, 没设置过时读到 null
-SortableMemoryKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();                 // long, 可排行
+MemoryIntKey<UUID> MANA = player.memoryInt(Key.sparrow("mana")).defaultValue(100).register().join();                  // int 数值键, 见下文
 
 // 上线: 从数据库读出全部内存键, 开始定时落库
 player.residence().online(uuid).join();
 
 Entity<UUID> entity = player.entity(uuid);
-int mana = entity.get(MANA);
-entity.write(MANA, mana - 20);
-entity.update(LEVEL, level -> level + 1);        // 读改写一步完成
+String locale = entity.get(LOCALE);
+entity.write(LOCALE, "en_us");
+entity.update(TITLE, title -> title == null ? "新人" : title);   // 读改写一步完成
 entity.write(TITLE, null);                       // 写 null 就是删除存储的值
 
 entity.save();                                   // 立刻落库, 不等定时
@@ -107,6 +107,26 @@ player.residence().offline(uuid).join();
 player.entity(target).override(TITLE, "管理员");   // 写库, 再通知管着他的那台服换成新值
 player.entity(target).override(MANA, null);       // 删掉存储的值, 读到的是默认值
 ```
+
+### 数值键
+
+`memoryInt`、`memoryLong`、`memoryDouble` 注册的键按原始类型读写，不装箱。
+
+```java
+// 不设 defaultValue 时默认值是 0
+SortableMemoryLongKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();          // 可排行
+SortableMemoryDoubleKey<UUID> DAMAGE = player.memoryDouble(Key.sparrow("damage")).sortable().register().join();
+
+int mana = entity.get(MANA);                                   // 返回 int
+entity.write(MANA, mana - 20);
+entity.add(LEVEL, 1);                                          // 加减, 返回新值
+entity.add(DAMAGE, 12.5);
+entity.updateInt(MANA, value -> Math.min(value + 50, 100));    // 读改写, 另有 updateLong 和 updateDouble
+entity.write(MANA, null);                                      // 恢复默认值
+```
+
+- 它们同时是 `MemoryKey<K, Integer>`、`MemoryKey<K, Long>`、`MemoryKey<K, Double>`，`override`、`watch`、`read`、`readCachedOrNull` 照常使用，这些方法收发的是装箱的值。
+- 三种都可以 `sortable()`。
 
 ## DB 键
 
@@ -154,6 +174,7 @@ CompletableFuture<String> result = data.transaction(tx -> {
 ```java
 player.top(COINS, 0, 10);        // CompletableFuture<List<RankEntry<UUID>>>, 从第 1 名起取 10 个
 player.rankOf(COINS, uuid);      // CompletableFuture<Long>, 名次从 1 开始, 数值相同名次相同
+player.top(DAMAGE, 0, 10);       // CompletableFuture<List<DoubleRankEntry<UUID>>>, double 键的排行值是 double
 ```
 
 只有 `sortable()` 的键能排行。内存键落库后才进排行，最多落后一个 `saveInterval`。

@@ -12,6 +12,7 @@ final class StoredValueCodec {
     private static final byte NO_VALUE = 0;
     private static final byte LONG_VALUE = 1;
     private static final byte BYTES_VALUE = 2;
+    private static final byte DOUBLE_VALUE = 3;
 
     private StoredValueCodec() {
     }
@@ -23,6 +24,10 @@ final class StoredValueCodec {
             case StoredValue.OfLong number -> {
                 buf.writeByte(LONG_VALUE);
                 buf.writeLong(number.value());
+            }
+            case StoredValue.OfDouble number -> {
+                buf.writeByte(DOUBLE_VALUE);
+                buf.writeDouble(number.value());
             }
             case StoredValue.OfBytes bytes -> {
                 buf.writeByte(BYTES_VALUE);
@@ -36,6 +41,7 @@ final class StoredValueCodec {
         return switch (buf.readByte()) {
             case LONG_VALUE -> new StoredValue.OfLong(buf.readLong());
             case BYTES_VALUE -> new StoredValue.OfBytes(ByteBufHelper.readByteArray(buf, Integer.MAX_VALUE));
+            case DOUBLE_VALUE -> new StoredValue.OfDouble(buf.readDouble());
             default -> null;
         };
     }

@@ -11,7 +11,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 
 @ApiStatus.Internal
-public final class HeldValue<T> {
+public final class HeldValue<T> implements HeldSlot<T> {
     private final StorageKey key;
     private final ValueForm<T> form;
 
@@ -19,7 +19,7 @@ public final class HeldValue<T> {
     private boolean cleared;            // 最近一次写入的是不是 null, 落库时据此删除这一行
     private boolean dirty;
 
-    // 内存键在持有容器里的槽. 修改和取脏要在 HeldEntity 的锁里调用, 读值不加锁
+    // 值是对象的内存键的槽
     public HeldValue(@NotNull StorageKey key, @NotNull ValueForm<T> form, @Nullable T value) {
         this.key = key;
         this.form = form;
@@ -27,23 +27,24 @@ public final class HeldValue<T> {
     }
 
     @Nullable
+    @Override
     public T value() {
         return this.value;
     }
 
-    // value 为 null 表示删除存储的值, 之后读到默认值
+    @Override
     public void set(@Nullable T value) {
         this.value = this.form.orFallback(value);
         this.cleared = value == null;
         this.dirty = true;
     }
 
-    // 收到覆盖时调用. stored 为 null 是删除存储的值
+    @Override
     public void overwrite(@Nullable StoredValue stored) {
         this.set(stored == null ? null : this.form.load(stored));
     }
 
-    // 脏的话清掉标记, 取出这一刻的值, 编码留到出锁以后
+    @Override
     public void takeDirty(@NotNull List<HeldEntity.Dirty> taken) {
         if (!this.dirty) return;
         this.dirty = false;
@@ -58,8 +59,8 @@ public final class HeldValue<T> {
         });
     }
 
-    // publish 用的当前值, null 表示没有值
     @Nullable
+    @Override
     public StoredValue stored() {
         return this.form.store(this.value);
     }

@@ -1,5 +1,6 @@
 package net.momirealms.sparrow.data.storage.sql.mariadb;
 
+import net.momirealms.sparrow.data.storage.DoubleRankRow;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.data.storage.RankRow;
@@ -80,7 +81,7 @@ final class MariaDbConnectionStorage implements EntityStorage {
                     while (rows.next()) {
                         String keyId = rows.getString(1);
                         if (dataKeys.contains(keyId)) {
-                            values.put(keyId, readValue(rows, 2, 3));
+                            values.put(keyId, readValue(rows, 2, 3, 4));
                         }
                     }
                 }
@@ -92,7 +93,7 @@ final class MariaDbConnectionStorage implements EntityStorage {
                     while (rows.next()) {
                         String keyId = rows.getString(1);
                         if (rankedKeys.contains(keyId)) {
-                            values.put(keyId, new StoredValue.OfLong(rows.getLong(2)));
+                            values.put(keyId, readRanked(rows, 2, 3));
                         }
                     }
                 }
@@ -146,14 +147,14 @@ final class MariaDbConnectionStorage implements EntityStorage {
                 try (PreparedStatement statement = this.connection.prepareStatement(this.lockReads ? tables.lockRanked() : tables.selectRanked())) {
                     bindTarget(statement, 1, entity, key);
                     try (ResultSet rows = statement.executeQuery()) {
-                        return rows.next() ? new StoredValue.OfLong(rows.getLong(1)) : null;
+                        return rows.next() ? readRanked(rows, 1, 2) : null;
                     }
                 }
             }
             try (PreparedStatement statement = this.connection.prepareStatement(this.lockReads ? tables.lockRow() : tables.selectRow())) {
                 bindTarget(statement, 1, entity, key);
                 try (ResultSet rows = statement.executeQuery()) {
-                    return rows.next() ? readValue(rows, 1, 2) : null;
+                    return rows.next() ? readValue(rows, 1, 2, 3) : null;
                 }
             }
         });
@@ -294,6 +295,41 @@ final class MariaDbConnectionStorage implements EntityStorage {
         });
     }
 
+    @NotNull
+    @Override
+    public List<DoubleRankRow> topDouble(@NotNull String entityType, @NotNull StorageKey key, int offset, int limit) {
+        MariaDbTables tables = this.tables(entityType);
+        return this.execute("read top of " + key.id(), () -> {
+            List<DoubleRankRow> top = new ArrayList<>();
+            try (PreparedStatement statement = this.connection.prepareStatement(tables.topDouble())) {
+                statement.setString(1, key.id());
+                statement.setInt(2, limit);
+                statement.setInt(3, offset);
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) {
+                        top.add(new DoubleRankRow(rows.getBytes(1), rows.getDouble(2)));
+                    }
+                }
+            }
+            return top;
+        });
+    }
+
+    @Override
+    public long countAboveDouble(@NotNull String entityType, @NotNull StorageKey key, double value) {
+        MariaDbTables tables = this.tables(entityType);
+        return this.execute("count above in " + key.id(), () -> {
+            try (PreparedStatement statement = this.connection.prepareStatement(tables.countAboveDouble())) {
+                statement.setString(1, key.id());
+                statement.setDouble(2, value);
+                try (ResultSet rows = statement.executeQuery()) {
+                    rows.next();
+                    return rows.getLong(1);
+                }
+            }
+        });
+    }
+
     // 调用方要在事务里调用
     @Override
     public void deleteEntity(@NotNull EntityRef entity) {
@@ -364,29 +400,47 @@ final class MariaDbConnectionStorage implements EntityStorage {
         statement.setString(index + 1, key.id());
     }
 
-    // 值从第 3 个参数开始. 排行表只有 num 列; 数据表的一行只有 num 或 val 其中一个有值
+    // 值从第 3 个参数开始. 排行表是 num, dbl 两列, 数据表是 num, val, dbl 三列, 一行只有其中一列有值
     private static void bindValue(@NotNull PreparedStatement statement, boolean ranked, @NotNull StoredValue value) throws SQLException {
-        if (ranked) {
-            statement.setLong(3, ((StoredValue.OfLong) value).value());
-            return;
+        int dbl = ranked ? 4 : 5;
+        if (!ranked) {
+            if (value instanceof StoredValue.OfBytes(byte[] bytes)) {
+                statement.setBytes(4, bytes);
+            } else {
+                statement.setNull(4, Types.VARBINARY);
+            }
         }
         switch (value) {
             case StoredValue.OfLong number -> {
                 statement.setLong(3, number.value());
-                statement.setNull(4, Types.VARBINARY);
+                statement.setNull(dbl, Types.DOUBLE);
             }
-            case StoredValue.OfBytes bytes -> {
+            case StoredValue.OfDouble number -> {
                 statement.setNull(3, Types.BIGINT);
-                statement.setBytes(4, bytes.value());
+                statement.setDouble(dbl, number.value());
+            }
+            case StoredValue.OfBytes ignored -> {
+                statement.setNull(3, Types.BIGINT);
+                statement.setNull(dbl, Types.DOUBLE);
             }
         }
     }
 
     @NotNull
-    private static StoredValue readValue(@NotNull ResultSet rows, int numColumn, int valColumn) throws SQLException {
+    private static StoredValue readValue(@NotNull ResultSet rows, int numColumn, int valColumn, int dblColumn) throws SQLException {
         long number = rows.getLong(numColumn);
         if (!rows.wasNull()) return new StoredValue.OfLong(number);
-        return new StoredValue.OfBytes(rows.getBytes(valColumn));
+        byte[] bytes = rows.getBytes(valColumn);
+        if (bytes != null) return new StoredValue.OfBytes(bytes);
+        return new StoredValue.OfDouble(rows.getDouble(dblColumn));
+    }
+
+    // 排行表的一行, num 为空时值在 dbl 列
+    @NotNull
+    private static StoredValue readRanked(@NotNull ResultSet rows, int numColumn, int dblColumn) throws SQLException {
+        long number = rows.getLong(numColumn);
+        if (!rows.wasNull()) return new StoredValue.OfLong(number);
+        return new StoredValue.OfDouble(rows.getDouble(dblColumn));
     }
 
     @FunctionalInterface

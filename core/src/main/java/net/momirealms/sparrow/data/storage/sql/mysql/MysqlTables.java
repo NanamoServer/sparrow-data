@@ -4,12 +4,12 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
-record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String rankIndex) {
+record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String rankIndex, @NotNull String rankDoubleIndex) {
 
-    // 一个实体类型的两张表. 表名和索引名都带上前缀和类型名, 最长 61 个字符
+    // 一个实体类型的两张表. 表名和索引名都带上前缀和类型名, 最长 62 个字符
     @NotNull
     static MysqlTables of(@NotNull String baseName) {
-        return new MysqlTables(baseName + "_data", baseName + "_ranked", baseName + "_rank");
+        return new MysqlTables(baseName + "_data", baseName + "_ranked", baseName + "_rank", baseName + "_rankd");
     }
 
     // path 存的是键 ID, 和 data_key 一样按字节比较, 键 ID 区分大小写
@@ -22,22 +22,25 @@ record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String
                     path VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
                     num BIGINT NULL,
                     val MEDIUMBLOB NULL,
+                    dbl DOUBLE NULL,
                     PRIMARY KEY (entity_id, path)
                 ) ENGINE = InnoDB""".formatted(this.data),
                 """
                 CREATE TABLE IF NOT EXISTS %s (
                     data_key VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
                     entity_id VARBINARY(64) NOT NULL,
-                    num BIGINT NOT NULL,
+                    num BIGINT NULL,
+                    dbl DOUBLE NULL,
                     PRIMARY KEY (entity_id, data_key),
-                    INDEX %s (data_key, num, entity_id)
-                ) ENGINE = InnoDB""".formatted(this.ranked, this.rankIndex)
+                    INDEX %s (data_key, num, entity_id),
+                    INDEX %s (data_key, dbl, entity_id)
+                ) ENGINE = InnoDB""".formatted(this.ranked, this.rankIndex, this.rankDoubleIndex)
         );
     }
 
     @NotNull
     String upsertData() {
-        return "INSERT INTO " + this.data + " (entity_id, path, num, val) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num), val = VALUES(val)";
+        return "INSERT INTO " + this.data + " (entity_id, path, num, val, dbl) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num), val = VALUES(val), dbl = VALUES(dbl)";
     }
 
     @NotNull
@@ -52,17 +55,17 @@ record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String
 
     @NotNull
     String selectRows() {
-        return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ?";
+        return "SELECT path, num, val, dbl FROM " + this.data + " WHERE entity_id = ?";
     }
 
     @NotNull
     String selectRow() {
-        return "SELECT num, val FROM " + this.data + " WHERE entity_id = ? AND path = ?";
+        return "SELECT num, val, dbl FROM " + this.data + " WHERE entity_id = ? AND path = ?";
     }
 
     @NotNull
     String lockRow() {
-        return "SELECT num, val FROM " + this.data + " WHERE entity_id = ? AND path = ? FOR UPDATE";
+        return "SELECT num, val, dbl FROM " + this.data + " WHERE entity_id = ? AND path = ? FOR UPDATE";
     }
 
     @NotNull
@@ -97,7 +100,7 @@ record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String
 
     @NotNull
     String upsertRanked() {
-        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num)";
+        return "INSERT INTO " + this.ranked + " (entity_id, data_key, num, dbl) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE num = VALUES(num), dbl = VALUES(dbl)";
     }
 
     @NotNull
@@ -107,17 +110,17 @@ record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String
 
     @NotNull
     String selectRankedRows() {
-        return "SELECT data_key, num FROM " + this.ranked + " WHERE entity_id = ?";
+        return "SELECT data_key, num, dbl FROM " + this.ranked + " WHERE entity_id = ?";
     }
 
     @NotNull
     String selectRanked() {
-        return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ?";
+        return "SELECT num, dbl FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ?";
     }
 
     @NotNull
     String lockRanked() {
-        return "SELECT num FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ? FOR UPDATE";
+        return "SELECT num, dbl FROM " + this.ranked + " WHERE entity_id = ? AND data_key = ? FOR UPDATE";
     }
 
     @NotNull
@@ -134,6 +137,17 @@ record MysqlTables(@NotNull String data, @NotNull String ranked, @NotNull String
     @NotNull
     String countAbove() {
         return "SELECT COUNT(*) FROM " + this.ranked + " WHERE data_key = ? AND num > ?";
+    }
+
+    // 浮点键的排行走 (data_key, dbl, entity_id) 这个索引
+    @NotNull
+    String topDouble() {
+        return "SELECT entity_id, dbl FROM " + this.ranked + " WHERE data_key = ? ORDER BY dbl DESC, entity_id DESC LIMIT ? OFFSET ?";
+    }
+
+    @NotNull
+    String countAboveDouble() {
+        return "SELECT COUNT(*) FROM " + this.ranked + " WHERE data_key = ? AND dbl > ?";
     }
 
     @NotNull

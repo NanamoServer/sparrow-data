@@ -75,17 +75,17 @@ The value sits in the memory of the server in charge of the entity. Reads and wr
 
 ```java
 // Register. Returns a future: when registered at runtime, entities already online have to load the new key first
-MemoryKey<UUID, Integer> MANA = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();          // default 100
+MemoryKey<UUID, String> LOCALE = player.memory(Key.sparrow("locale"), ValueCodecs.STRING, "en_us").register().join(); // default en_us
 MemoryKey<UUID, @Nullable String> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // no default, reads null until it is set
-SortableMemoryKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();                 // a long that can be ranked
+MemoryIntKey<UUID> MANA = player.memoryInt(Key.sparrow("mana")).defaultValue(100).register().join();                  // an int number key, see below
 
 // Online: read every memory key from the database and start the save interval
 player.residence().online(uuid).join();
 
 Entity<UUID> entity = player.entity(uuid);
-int mana = entity.get(MANA);
-entity.write(MANA, mana - 20);
-entity.update(LEVEL, level -> level + 1);        // read, change and write in one step
+String locale = entity.get(LOCALE);
+entity.write(LOCALE, "zh_cn");
+entity.update(TITLE, title -> title == null ? "Newcomer" : title);   // read, change and write in one step
 entity.write(TITLE, null);                       // writing null deletes the stored value
 
 entity.save();                                   // save now instead of waiting for the interval
@@ -107,6 +107,26 @@ Any server can change an entity that is on another server or offline:
 player.entity(target).override(TITLE, "Admin");   // writes the database, then tells the server in charge to switch
 player.entity(target).override(MANA, null);       // deletes the stored value, reads give the default
 ```
+
+### Number keys
+
+Keys registered with `memoryInt`, `memoryLong` and `memoryDouble` are read and written as primitives, with no boxing.
+
+```java
+// Without defaultValue the default is 0
+SortableMemoryLongKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();          // can be ranked
+SortableMemoryDoubleKey<UUID> DAMAGE = player.memoryDouble(Key.sparrow("damage")).sortable().register().join();
+
+int mana = entity.get(MANA);                                   // returns an int
+entity.write(MANA, mana - 20);
+entity.add(LEVEL, 1);                                          // adds or subtracts, returns the new value
+entity.add(DAMAGE, 12.5);
+entity.updateInt(MANA, value -> Math.min(value + 50, 100));    // read, change and write; there are updateLong and updateDouble too
+entity.write(MANA, null);                                      // back to the default
+```
+
+- They are also `MemoryKey<K, Integer>`, `MemoryKey<K, Long>` and `MemoryKey<K, Double>`, so `override`, `watch`, `read` and `readCachedOrNull` work as usual. Those methods take and return boxed values.
+- All three can be `sortable()`.
 
 ## DB keys
 
@@ -154,6 +174,7 @@ The body is run again automatically after a deadlock, so it may run several time
 ```java
 player.top(COINS, 0, 10);        // CompletableFuture<List<RankEntry<UUID>>>, 10 entries starting from the first place
 player.rankOf(COINS, uuid);      // CompletableFuture<Long>, positions start at 1, equal values share a position
+player.top(DAMAGE, 0, 10);       // CompletableFuture<List<DoubleRankEntry<UUID>>>, a double key ranks by a double
 ```
 
 Only `sortable()` keys can be ranked. A memory key enters the ranking when it is saved, so it lags by up to one `saveInterval`.

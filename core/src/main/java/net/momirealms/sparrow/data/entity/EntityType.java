@@ -1,13 +1,17 @@
 package net.momirealms.sparrow.data.entity;
 
+import net.momirealms.sparrow.data.DoubleRankEntry;
 import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.SortableKey;
+import net.momirealms.sparrow.data.key.SortableMemoryDoubleKey;
 import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryDoubleKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.MemoryIntKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
@@ -37,8 +41,15 @@ public interface EntityType<K> {
     @NotNull
     <T> MemoryKeyBuilder<K, @Nullable T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec);
 
+    // int, long, double 三种数值键直接存原始值, 读写不装箱, 默认值不设时为 0
+    @NotNull
+    MemoryIntKeyBuilder<K> memoryInt(@NotNull Key id);
+
     @NotNull
     MemoryLongKeyBuilder<K> memoryLong(@NotNull Key id);
+
+    @NotNull
+    MemoryDoubleKeyBuilder<K> memoryDouble(@NotNull Key id);
 
     @NotNull
     <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue);
@@ -75,6 +86,10 @@ public interface EntityType<K> {
 
     @NotNull
     CompletableFuture<List<RankEntry<K>>> top(@NotNull SortableKey<K> key, int offset, int limit);
+
+    // 浮点键的排行, 数值是 double. 传 SortableMemoryDoubleKey 时编译器会选中这个重载
+    @NotNull
+    CompletableFuture<List<DoubleRankEntry<K>>> top(@NotNull SortableMemoryDoubleKey<K> key, int offset, int limit);
 
     @NotNull
     CompletableFuture<Long> rankOf(@NotNull SortableKey<K> key, @NotNull K id);

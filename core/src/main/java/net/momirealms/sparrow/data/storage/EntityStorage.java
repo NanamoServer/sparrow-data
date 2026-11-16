@@ -41,6 +41,12 @@ public interface EntityStorage {
 
     long countAbove(@NotNull String entityType, @NotNull StorageKey key, long value);
 
+    // 浮点键的排行, 值在 dbl 列, 和整数键的排行各走各的索引
+    @NotNull
+    List<DoubleRankRow> topDouble(@NotNull String entityType, @NotNull StorageKey key, int offset, int limit);
+
+    long countAboveDouble(@NotNull String entityType, @NotNull StorageKey key, double value);
+
     void deleteEntity(@NotNull EntityRef entity);
 
     // 跨所有实体删除这个键 ID 下的全部数据, 数据表和排行表都删. 调用时键已经注销, 数据层不知道它是不是 sortable

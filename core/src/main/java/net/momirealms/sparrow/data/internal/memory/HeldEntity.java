@@ -25,6 +25,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.DoubleUnaryOperator;
+import java.util.function.IntUnaryOperator;
+import java.util.function.LongUnaryOperator;
 import java.util.function.UnaryOperator;
 
 @ApiStatus.Internal
@@ -35,7 +38,7 @@ public final class HeldEntity<K> {
     private final EntityRef ref;
     private final DataServiceImpl service;
 
-    private final Map<AbstractDataKey<K>, HeldValue<?>> values;
+    private final Map<AbstractDataKey<K>, HeldSlot<?>> values;
 
     private final AtomicReference<CompletableFuture<Void>> lastSave = new AtomicReference<>(CompletableFuture.completedFuture(null));
     private volatile boolean released;
@@ -53,7 +56,7 @@ public final class HeldEntity<K> {
     @NotNull
     public static <K> Slots<K> decode(@NotNull List<AbstractDataKey<K>> keys, @NotNull StoredEntity stored) {
         int size = keys.size();
-        Map<AbstractDataKey<K>, HeldValue<?>> values = HashMap.newHashMap(size);
+        Map<AbstractDataKey<K>, HeldSlot<?>> values = HashMap.newHashMap(size);
         for (int i = 0; i < size; i++) {
             AbstractDataKey<K> key = keys.get(i);
             values.put(key, loadValue((ValueKeyImpl<?, ?>) key, stored.values().get(key.storageKey().id())));
@@ -90,16 +93,74 @@ public final class HeldEntity<K> {
     @Nullable
     public synchronized <T> T update(@NotNull ValueKeyImpl<K, T> key, @NotNull UnaryOperator<T> operator) {
         this.requireHeld();
-        HeldValue<T> slot = this.value(key);
+        HeldSlot<T> slot = this.value(key);
         slot.set(operator.apply(slot.value()));
         return slot.value();
+    }
+
+    // int, long, double 键的原始值读写. 值在槽里是一个 long: int 和 long 就是数值本身, double 是它的位模式, 由调用方换算
+    public long bits(@NotNull AbstractDataKey<K> key) {
+        return this.number(key).bits();
+    }
+
+    public synchronized void setBits(@NotNull AbstractDataKey<K> key, long bits) {
+        this.requireHeld();
+        this.number(key).setBits(bits);
+    }
+
+    public synchronized int addInt(@NotNull AbstractDataKey<K> key, int delta) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        int value = (int) slot.bits() + delta;
+        slot.setBits(value);
+        return value;
+    }
+
+    public synchronized long addLong(@NotNull AbstractDataKey<K> key, long delta) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        long value = slot.bits() + delta;
+        slot.setBits(value);
+        return value;
+    }
+
+    public synchronized double addDouble(@NotNull AbstractDataKey<K> key, double delta) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        double value = Double.longBitsToDouble(slot.bits()) + delta;
+        slot.setBits(Double.doubleToRawLongBits(value));
+        return value;
+    }
+
+    public synchronized int updateInt(@NotNull AbstractDataKey<K> key, @NotNull IntUnaryOperator operator) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        int value = operator.applyAsInt((int) slot.bits());
+        slot.setBits(value);
+        return value;
+    }
+
+    public synchronized long updateLong(@NotNull AbstractDataKey<K> key, @NotNull LongUnaryOperator operator) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        long value = operator.applyAsLong(slot.bits());
+        slot.setBits(value);
+        return value;
+    }
+
+    public synchronized double updateDouble(@NotNull AbstractDataKey<K> key, @NotNull DoubleUnaryOperator operator) {
+        this.requireHeld();
+        HeldNumber<?> slot = this.number(key);
+        double value = operator.applyAsDouble(Double.longBitsToDouble(slot.bits()));
+        slot.setBits(Double.doubleToRawLongBits(value));
+        return value;
     }
 
     // 收到覆盖时调用. 新值写进容器并标脏, 下一次落库会再写一遍, 盖掉在途落库可能写回库里的旧值.
     // 已经释放的容器不再应用; 键已经注销, 槽也摘掉了时跳过
     public synchronized void override(@NotNull AbstractDataKey<K> key, @Nullable StoredValue stored) {
         if (this.released) return;
-        HeldValue<?> value = this.values.get(key);
+        HeldSlot<?> value = this.values.get(key);
         if (value != null) value.overwrite(stored);
     }
 
@@ -151,7 +212,7 @@ public final class HeldEntity<K> {
     private void saveDirty() {
         List<Dirty> taken = new ArrayList<>();
         synchronized (this) {
-            for (HeldValue<?> slot : this.values.values()) {
+            for (HeldSlot<?> slot : this.values.values()) {
                 slot.takeDirty(taken);
             }
         }
@@ -161,7 +222,7 @@ public final class HeldEntity<K> {
     private void saveDetached(@NotNull AbstractDataKey<K> key) {
         List<Dirty> taken = new ArrayList<>();
         synchronized (this) {
-            HeldValue<?> value = this.values.remove(key);
+            HeldSlot<?> value = this.values.remove(key);
             if (value != null) value.takeDirty(taken);
         }
         this.store(taken);
@@ -208,13 +269,19 @@ public final class HeldEntity<K> {
 
     @SuppressWarnings("unchecked")
     @NotNull
-    private <T> HeldValue<T> value(@NotNull ValueKeyImpl<K, T> key) {
-        return (HeldValue<T>) this.values.get(key);
+    private <T> HeldSlot<T> value(@NotNull ValueKeyImpl<K, T> key) {
+        return (HeldSlot<T>) this.values.get(key);
     }
 
     @NotNull
-    private static <T> HeldValue<T> loadValue(@NotNull ValueKeyImpl<?, T> key, @Nullable StoredValue stored) {
+    private HeldNumber<?> number(@NotNull AbstractDataKey<K> key) {
+        return (HeldNumber<?>) this.values.get(key);
+    }
+
+    @NotNull
+    private static <T> HeldSlot<T> loadValue(@NotNull ValueKeyImpl<?, T> key, @Nullable StoredValue stored) {
         ValueForm<T> form = key.form();
+        if (form instanceof ValueForm.NumberForm<T> number) return new HeldNumber<>(key.storageKey(), number, number.loadBits(stored));
         return new HeldValue<>(key.storageKey(), form, form.load(stored));
     }
 
@@ -226,6 +293,6 @@ public final class HeldEntity<K> {
     }
 
     // 解码好的槽, 还没放进容器
-    public record Slots<K>(@NotNull Map<AbstractDataKey<K>, HeldValue<?>> values) {
+    public record Slots<K>(@NotNull Map<AbstractDataKey<K>, HeldSlot<?>> values) {
     }
 }
