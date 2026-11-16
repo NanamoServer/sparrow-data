@@ -2,12 +2,14 @@
 
 **English** · [简体中文](./README_CN.md)
 
-A per-entity data layer for Minecraft server networks. Data is attached to entities (players, guilds, anything with an id) through typed keys, and every key picks one of two authority models:
+A data layer for Minecraft network plugins. Data is attached to entities (players, guilds, anything with an id) and read and written through typed keys. Loading, saving and cross-server sync are handled for you.
 
-- **Memory keys** live on the one server that currently holds the entity. Reads and writes are plain in-memory calls; the data is saved on an interval and on `offline`.
-- **DB keys** are authoritative in the database. Every write goes straight to storage as an atomic statement or a CAS loop, so any server can write at any time.
-
-Other servers see both kinds through snapshots that are invalidated over Redis. Storage ships for MySQL, MariaDB and PostgreSQL.
+| Key | Where the data lives | Fits |
+|---|---|---|
+| Memory key | In the memory of the server in charge of the entity, saved on an interval | data only one server changes and that is read and written often, such as mana |
+| DB key | The database, every change is written at once | data several servers may change, such as coins |
+| View key | Your own table | when you only want caching and cross-server refresh, such as homes |
+| Roster key | Redis | who across the network is in some state right now, such as vanished |
 
 ## Installation
 
@@ -17,199 +19,252 @@ repositories {
 }
 
 dependencies {
-    implementation("net.momirealms:sparrow-data:0.1")
+    implementation("net.momirealms:sparrow-data:0.3")
 }
 ```
 
-Requires Java 21. The following are `compileOnly` and must be provided by the host:
+Requires Java 21. These dependencies are `compileOnly` and must be provided by the host:
 
 | Dependency | Version used |
 |---|---|
-| `net.momirealms:sparrow-redis-message-broker` | 0.0.7 |
+| `net.momirealms:sparrow-message` | 26.11.1 |
+| `io.lettuce:lettuce-core` | 7.7.0.RELEASE |
 | `io.netty:netty-buffer` | 4.2.7.Final |
 | `com.github.ben-manes.caffeine:caffeine` | 3.2.3 |
 | `org.slf4j:slf4j-api` | 2.0.17 |
-| `io.lettuce:lettuce-core` | 7.7.0.RELEASE |
 
-## Setup
+## Lifecycle
 
 ```java
-EntityStorage storage = new MysqlEntityStorage(dataSource, "sparrow_"); // MariaDbEntityStorage / PostgresEntityStorage
-
+// 1. Create. build() registers messages on the broker, so it must come before broker.subscribe()
 DataService data = SparrowDataService.builder()
-        .storage(storage)
-        .executor(executor)                    // runs every blocking storage call
+        .storage(new MysqlEntityStorage(dataSource, "sparrow_"))   // or MariaDbEntityStorage / PostgresEntityStorage
+        .executor(executor)                     // every database call runs on this pool
         .messageBroker(broker)
-        .saveInterval(Duration.ofMinutes(5))   // auto save of held entities
-        .snapshotExpiry(Duration.ofMinutes(5)) // optional, default 5 minutes
-        .redis(redisClient)                    // optional, only needed for roster keys
-        .serverAlive(serverId -> servers.isOnline(serverId)) // optional, filters roster records left by crashed servers
+        .saveInterval(Duration.ofMinutes(5))    // how often memory keys are saved automatically
+        .snapshotExpiry(Duration.ofMinutes(5))  // optional, how long an unread snapshot is kept, default 5 minutes
+        .redis(redisClient)                     // optional, only roster keys need it
+        .serverAlive(servers::isOnline)         // optional, only roster keys need it
         .build();
+
+// 2. Subscribe
 broker.subscribe();
 
-// on shutdown: offlines every held entity and waits for the saves
+// 3. Register entity types and keys. They can also be registered and unregistered while running
+EntityType<UUID> player = data.registerEntityType("player", EntityIdCodec.UUID);
+
+// 4. Shutdown. Takes every online entity offline and waits for the saves, then close your own pool, executor and broker
 data.close();
 ```
 
-`build()` registers the data layer's messages on the broker. Call it before `broker.subscribe()`, at the same point on every server of the channel. The storage, executor and broker belong to the host, and the host closes them after `data.close()`.
-
-Tables are created when the first key that stores data is registered on an entity type: `{prefix}{type}_data` and `{prefix}{type}_ranked`. A type that only has view keys gets no tables. The prefix is at most 24 characters of `[a-z0-9_]`.
-
-## Entity types and keys
+## Entity types
 
 ```java
-EntityType<UUID> player = data.registerEntityType("player", EntityIdCodec.UUID);
+EntityType<UUID> player = data.registerEntityType("player", EntityIdCodec.UUID);   // also STRING, INT, LONG
+EntityType<String> guild = data.registerEntityType("guild", EntityIdCodec.STRING);
 
-// memory keys: register() completes after every held entity has loaded the new key
-MemoryKey<UUID, Integer> mana = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();
-MemoryKey<UUID, Optional<String>> title = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();
-SortableMemoryKey<UUID> level = player.memoryLong(Key.sparrow("level")).sortable().register().join();
-
-// DB keys: usable as soon as register() returns
-DbKey<UUID, Profile> profile = player.db(Key.sparrow("profile"), PROFILE, Profile.EMPTY).register();
-SortableDbCounterKey<UUID> coins = player.dbCounter(Key.sparrow("coins")).scale(2).sortable().register();
+Entity<UUID> entity = player.entity(uuid);   // only an address, available at any time, nothing to load first
 ```
 
-- Type names are 1 to 32 characters of `[a-z0-9_]`. Key ids are at most 64 characters and may not contain `.`. An encoded entity id is at most 64 bytes.
-- Registering without a default value makes the value type `Optional<T>`; writing `Optional.empty()` deletes the stored value.
-- `memoryLong` keys and DB counter keys can be `sortable()`, which enables `top` and `rankOf`.
-- Keys can be registered and unregistered at runtime. `unregister` keeps the data; `purge(Key)` deletes a key's data across all entities and must only be called once no server has the key registered.
-- `entity.delete()` removes all data of one entity. No server may hold it at that moment.
-- There are no map keys. When the entries are fixed or come from config, register one key per entry, such as one counter key per currency. When they are not fixed but few, put the whole collection into one value, such as `MemoryKey<UUID, List<Home>>`. When there are many, or they need queries and constraints, use your own table with a view key.
+- Type names are 1 to 32 characters of `[a-z0-9_]`. An encoded entity id is at most 64 bytes.
+- Each type has two tables, `{prefix}{type}_data` and `{prefix}{type}_ranked`, created when its first memory key or DB key is registered. The prefix is at most 24 characters of `[a-z0-9_]`.
 
-## Memory authority
+## Memory keys
 
-The host's residence logic decides which server holds an entity and calls `online` / `offline`. Exactly one server may hold an entity at a time.
+The value sits in the memory of the server in charge of the entity. Reads and writes never touch the database.
 
 ```java
-player.residence().online(uuid);          // load memory keys, start auto save
+// Register. Returns a future: when registered at runtime, entities already online have to load the new key first
+MemoryKey<UUID, Integer> MANA = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();          // default 100
+MemoryKey<UUID, Optional<String>> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // no default, so the type is Optional
+SortableMemoryKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();                 // a long that can be ranked
+
+// Online: read every memory key from the database and start the save interval
+player.residence().online(uuid).join();
 
 Entity<UUID> entity = player.entity(uuid);
-entity.write(mana, 80);
-entity.update(level, current -> current + 1);
-int value = entity.get(mana);
+int mana = entity.get(MANA);
+entity.write(MANA, mana - 20);
+entity.update(LEVEL, level -> level + 1);        // read, change and write in one step
+entity.write(TITLE, Optional.empty());           // writing empty to an optional key deletes it
 
-entity.publish(mana);                     // push the current value into other servers' snapshots, no save
-entity.save();                            // save now
+entity.save();                                   // save now instead of waiting for the interval
+entity.publish(MANA);                            // push the current value into other servers' snapshots, no save
 
-player.residence().offline(uuid);         // release, then save what was written before
+// Offline: save, then drop from memory
+player.residence().offline(uuid).join();
 ```
 
-- Memory reads and writes only work on the holder; anywhere else they throw `IllegalStateException`. All modifications and saves of one entity are serialized by a per-entity lock.
-- Values you get back must not be mutated in place. Return a new value from `update` instead.
-- Other servers use `peek` (snapshot; `null` until loaded, the first call starts the load) or `read` (a future that reads storage).
-- `override(key, value)` / `reset(key)` work from any server, whether or not anyone holds the entity: the value is written to storage and pushed to the holder.
-- Unsaved memory data is lost if the server crashes; the save interval bounds the loss.
+- **Only one server may have an entity `online` at any moment.** On a server switch the new server must wait for the old server's `offline` to finish. That lock is the host's job.
+- `get` / `write` / `update` / `save` / `publish` only work on the server that called `online`. Elsewhere they throw `IllegalStateException`.
+- Do not modify an object you read. Return a new one from `update`.
+- A crash loses the changes made after the last save.
 
-## DB authority
+Any server can change an entity that is on another server or offline:
 
 ```java
-entity.add(coins, coins.toUnits(12.5, RoundingMode.UNNECESSARY));
-entity.take(coins, price).thenAccept(balance -> {
-    if (balance.isEmpty()) {
-        // insufficient balance, nothing was written
-    }
+player.entity(target).override(TITLE, Optional.of("Admin"));   // writes the database, then tells the server in charge to switch
+player.entity(target).reset(MANA);                              // back to the default
+```
+
+## DB keys
+
+Every change is one database statement. Any server can write at any time, with no `online` needed.
+
+```java
+// Register, usable at once
+DbKey<UUID, GuildInfo> INFO = guild.db(Key.sparrow("info"), GUILD_INFO, GuildInfo.EMPTY).register();
+DbCounterKey<UUID> GEMS = player.dbCounter(Key.sparrow("gems")).register();
+SortableDbCounterKey<UUID> COINS = player.dbCounter(Key.sparrow("coins")).sortable().register();
+
+Entity<UUID> entity = player.entity(uuid);
+
+// Counter keys. A missing value counts as 0
+entity.add(COINS, 100);                              // CompletableFuture<Long>, the new balance
+entity.take(COINS, 30).thenAccept(balance -> {       // CompletableFuture<OptionalLong>
+    if (balance.isEmpty()) return;                   // not enough, nothing was taken
 });
-entity.update(profile, current -> current.withMotto("hello"));
+entity.set(COINS, 0);
 
-CompletableFuture<TransferResult> result = data.transaction(tx -> {
-    OptionalLong balance = tx.take(from, coins, amount);
-    if (balance.isEmpty()) {
-        tx.rollback();                        // marks the rollback, the return value still reaches the caller
-        return TransferResult.insufficient();
+// Plain DB keys
+guild.entity(guildId).set(INFO, info);
+guild.entity(guildId).update(INFO, old -> old.withNotice("Raid on Saturday"));   // writes on condition of the old value, re-reads and recomputes on conflict
+```
+
+The function passed to `update` may run several times. Keep it to computation, with no messages sent or items given inside.
+
+### Transactions
+
+```java
+CompletableFuture<String> result = data.transaction(tx -> {
+    if (tx.take(from, COINS, amount).isEmpty()) {
+        tx.rollback();               // undoes the earlier changes, the return value still reaches the caller
+        return "Not enough coins";
     }
-    tx.add(to, coins, amount);
-    return TransferResult.success(balance.getAsLong());
+    tx.add(to, COINS, amount);
+    return "Sent";                   // a normal return commits, an exception rolls back
 });
-
-player.top(coins, 0, 10);
-player.rankOf(coins, uuid);
 ```
 
-- `update` is a CAS loop on the stored bytes, so its operator may run several times and must be free of side effects. An update that encodes to the same bytes neither writes nor broadcasts.
-- The value a transaction body returns becomes the result of the future. A normal return commits; after `tx.rollback()` the transaction rolls back and the return value still reaches the caller. A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. After commit, the values the transaction wrote are put into this server's existing snapshots first, then invalidations are broadcast; a rolled back transaction touches neither.
-- Counters treat a missing value as 0. `take` fails without writing when the balance is too low.
-- `top` and `rankOf` read the ranking table. Memory keys reach it when they are saved, so their ranking lags by up to one save interval.
+The body is run again automatically after a deadlock, so it may run several times too.
 
-## Watching scalar values
-
-Subscribe before reading the initial snapshot:
+### Ranking
 
 ```java
-Watch watch = target.watch(likesKey, () -> refresh(target.peek(likesKey)));
-refresh(target.peek(likesKey));
+player.top(COINS, 0, 10);        // CompletableFuture<List<RankEntry<UUID>>>, 10 entries starting from the first place
+player.rankOf(COINS, uuid);      // CompletableFuture<Long>, positions start at 1, equal values share a position
 ```
 
-An already available value is not replayed. A cold read returns null; its completion notifies even for a zero count. Watches share the local snapshot and its in-flight load. Callbacks can run concurrently on the publishing threads: keep them fast and pull the latest state. Notifications may coalesce. Call `watch.close()` to unsubscribe; this does not wait for callbacks already running. After the last watch closes, ordinary snapshot expiry resumes.
+Only `sortable()` keys can be ranked. A memory key enters the ranking when it is saved, so it lags by up to one `saveInterval`.
 
-For memory keys the watch follows the same source as `peek`. Local writes and overrides are visible while held; other servers still see publishes or saved snapshots. Acquiring or releasing ownership only notifies if the visible value changes. Release precedes the final save, so an older snapshot or null may be visible before the final value arrives.
+## Reading from other servers
 
-Whether a value changed is decided by `equals`; a top-level `byte[]` is compared by content. A value type without a content-based `equals` notifies on every reload.
-
-When you only need synchronous reads and don't care about changes, use `pin`. It keeps the snapshot loaded and neither compares nor notifies:
+The same for memory keys, DB keys and view keys.
 
 ```java
-Pin pin = wallet.pin(coins);
-pin.ready().thenRun(() -> balance = wallet.peek(coins));   // peek is guaranteed to read a value after ready
-// when the player quits
+Entity<UUID> target = player.entity(targetId);
+
+target.read(COINS);              // CompletableFuture<T>, reads the latest value
+Long coins = target.peek(COINS); // synchronous read of this server's snapshot. Returns null until loaded and starts loading in the background
+```
+
+A snapshot refreshes when the data changes and is dropped when nobody reads it for `snapshotExpiry`.
+
+### watch and pin
+
+```java
+// watch: calls back when the value changes. The callback carries no value, read it with peek
+Watch watch = target.watch(COINS, () -> menu.refresh(target.peek(COINS)));
+watch.ready().thenRun(() -> menu.open(target.peek(COINS)));   // ready completes once peek can read a value
+watch.close();                                                // always close it
+
+// pin: only keeps the snapshot loaded, no callback. For synchronous reads while a player is online
+Pin pin = target.pin(COINS);
+pin.ready().join();
+long balance = target.peek(COINS);                            // never null until close
 pin.close();
 ```
 
-A `Watch` is a `Pin` with a callback; `ready()` and `close()` mean the same on both.
+- A watched or pinned snapshot does not expire.
+- Whether a value changed is decided with `equals`. Your own value types need `equals`; a record is enough.
+- Callbacks may run on the writing thread, the executor or a Redis thread. Keep them fast and switch to the main thread before touching Bukkit. Quick successive changes may arrive as one notification.
 
 ## View keys
 
-Use a view key when the data lives in the host's own tables but should still get snapshots and cross-server invalidation. The host supplies a function that loads by entity id and calls `invalidate` after changing the data:
+The data lives in your own table. Sparrow Data only provides snapshots and cross-server refresh.
 
 ```java
-ViewKey<UUID, List<Home>> homes = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
+// Register. The loader is your own query, returns a CompletableFuture and must not yield null
+ViewKey<UUID, List<Home>> HOMES = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
 
-List<Home> current = player.entity(owner).peek(homes);      // synchronous snapshot read
-homeStore.create(home).thenCompose(created -> player.entity(owner).invalidate(homes));
+Entity<UUID> entity = player.entity(owner);
+entity.peek(HOMES);                       // peek / read / watch / pin work as on any other key
+entity.read(HOMES);                       // calls the loader every time
+
+// After changing your own table, say so: this server reloads its snapshot and so do the others
+homeStore.create(home).thenCompose(done -> entity.invalidate(HOMES));   // when the future completes, peek here returns the new data
 ```
 
-- The loader returns a `CompletableFuture` and is responsible for leaving the calling thread. Its result must not be `null`; return an empty collection or `Optional.empty()` when there is no data. It is called on a cold load, on every invalidation and on every `read`.
-- `invalidate` reloads this server's snapshot and tells the other servers to reload theirs. The future completes once this server's reload has landed in the snapshot, or immediately if this server has no snapshot. If the reload fails it fails with the loader's exception and the snapshot keeps the old value.
-- `peek`, `read`, `watch` and `pin` work on view keys like on any other value key. Loaded values are shared by all readers and must be treated as immutable.
+Loaded objects are shared by every reader, so do not modify them. An entity type that only has view keys gets no tables.
 
 ## Roster keys
 
-A roster key answers "who is in a given state across the network right now": a vanish list, an AFK list, staff on duty. Records live in Redis, are fine to lose, and are never saved to the database. Every server keeps a full mirror in memory, so lookups are synchronous.
+A table shared by the whole network: entity id to value. Every server keeps a full mirror in memory, so lookups are synchronous. It answers "who across the network is vanished / AFK / on duty right now". The data lives in Redis and is never saved to the database.
 
 ```java
-// register after broker.subscribe(); the future completes once the mirror is loaded
-RosterKey<UUID, String> vanished = player.roster(Key.sparrow("vanished"), ValueCodecs.STRING).register().join();
+// Register. Must come after broker.subscribe(); the future completes once the mirror is loaded
+RosterKey<UUID, String> VANISHED = player.roster(Key.sparrow("vanished"), ValueCodecs.STRING).register().join();
 
-entity.announce(vanished, playerName);            // adds to the roster, the record belongs to this server
-entity.withdraw(vanished);                        // removes it
+Entity<UUID> entity = player.entity(uuid);
 
-String name = player.entity(uuid).member(vanished);   // synchronous, null when not in the roster
-Map<UUID, String> all = player.members(vanished);
+// Write. The record belongs to this server and is visible here before the call returns
+entity.announce(VANISHED, playerName);
 
-Watch whole = player.watch(vanished, menu::refresh);                 // any member changed
-Watch single = player.entity(uuid).watch(vanished, menu::refresh);   // this entity changed
+// Synchronous lookup on any server
+String name = entity.member(VANISHED);                 // null when not in the roster
+Map<UUID, String> all = player.members(VANISHED);      // a copy of all current members
+
+// Change notifications
+Watch whole = player.watch(VANISHED, menu::refresh);   // any member enters, leaves or changes value
+Watch single = entity.watch(VANISHED, tag::refresh);   // only this entity
+
+// Withdraw. Removes the record only if this server owns it
+entity.withdraw(VANISHED);
 ```
 
-- Pass `redis(RedisClient)` to the builder, and it must be the same client the broker's connection comes from. The data layer opens its own command connection on it and closes only that connection on `close()`.
-- An `announce` is visible on this server before the call returns; other servers follow through messages. When another server announces the same entity, the record takes the new value and belongs to that server.
-- `withdraw` only removes a record this server owns. After a player switches servers, a late withdraw from the old server does not remove the new server's record. `offline` does not withdraw for you.
-- Registering a roster key clears the records this server left behind in a previous run. Unregistering the key and `data.close()` clear every record this server owns.
-- A crashed server cannot clean up. With `serverAlive` set, records whose owning server is not alive are filtered out on read.
-- After a Redis connection comes back, the data layer reconciles on its own: it restores this server's records that are missing in Redis, then reloads the mirror. This repairs both messages missed while the subscription was down and a wiped Redis.
-- `watch` callbacks carry no value and follow the same threading rules as other watches; `ready()` is always complete.
+Ownership and cleanup of a record:
+
+```java
+// survival
+entity.announce(VANISHED, name);    // the record belongs to survival
+// the player switches to the resource server, on the resource server
+entity.announce(VANISHED, name);    // overwrites, the record now belongs to the resource server
+// survival only now finishes handling the quit
+entity.withdraw(VANISHED);          // removes nothing, the record no longer belongs to survival
+// resource server
+entity.withdraw(VANISHED);          // removed, no server sees it any more
+```
+
+| Situation | What happens |
+|---|---|
+| Registering a roster key | records this server left from its previous run are cleared, then the mirror is loaded |
+| Unregistering the key, `data.close()` | every record this server owns is cleared |
+| An entity goes `offline` | nothing is withdrawn automatically, call `withdraw` yourself |
+| A server crashes | its records stay until it restarts; with `serverAlive` set, other servers skip records of a server that is not alive |
+| Redis disconnects or is wiped | after reconnecting, every server restores its own records and reloads the mirror |
+
+The `RedisClient` passed to `redis(...)` must be the same one the broker uses.
 
 ## Values
 
-A key's value is turned into bytes by a `ValueCodec<T>`:
-
 ```java
-// built-in: ValueCodecs.BOOLEAN, INT, LONG, DOUBLE, STRING, UUID, BYTES
+// Built in: ValueCodecs.BOOLEAN, INT, LONG, DOUBLE, STRING, UUID, BYTES
 static final ValueCodec<Rank> RANK = ValueCodecs.STRING.xmap(Rank::valueOf, Rank::name);
 static final ValueCodec<List<UUID>> MEMBERS = ValueCodec.list(ValueCodecs.UUID);
 static final ValueCodec<Map<String, Integer>> KILLS = ValueCodec.map(ValueCodecs.STRING, ValueCodecs.INT);
-static final ValueCodec<Optional<UUID>> LEADER = ValueCodec.optional(ValueCodecs.UUID);
-static final ValueCodec<Snapshot> SNAPSHOT = ValueCodec.of(Snapshot::toBytes, Snapshot::fromBytes);
+static final ValueCodec<ItemStack> ITEM = ValueCodec.of(ItemStack::serializeAsBytes, ItemStack::deserializeBytes);
 
+// Use struct for records: fields are written in order and read in order
 record Home(String world, double x, double y, double z, String server) {}
 static final ValueCodec<Home> HOME = ValueCodec.struct(
         (home, out) -> {
@@ -217,60 +272,60 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
             out.write(ValueCodecs.DOUBLE, home.x());
             out.write(ValueCodecs.DOUBLE, home.y());
             out.write(ValueCodecs.DOUBLE, home.z());
-            out.write(ValueCodecs.STRING, home.server());   // added in v2
+            out.write(ValueCodecs.STRING, home.server());   // new fields go at the end only
         },
         in -> new Home(
                 in.read(ValueCodecs.STRING),
                 in.read(ValueCodecs.DOUBLE),
                 in.read(ValueCodecs.DOUBLE),
                 in.read(ValueCodecs.DOUBLE),
-                in.hasRemaining() ? in.read(ValueCodecs.STRING) : "lobby"   // v1 data has no server
+                in.hasRemaining() ? in.read(ValueCodecs.STRING) : "lobby"   // old data does not have this field
         )
 );
 ```
 
-- The same value must always encode to the same bytes, and `decode(encode(v))` must equal `v`. Non-deterministic encoding stays correct but turns no-op updates into writes. Maps encode in iteration order, so use `LinkedHashMap` or `TreeMap` when that matters.
-- `decode` may run on the Redis subscription thread, so keep it fast and thread-safe. It must not keep a reference to the input array.
-- Value types need a content-based `equals`; `watch` uses it to decide whether a value changed. Records, `String`, `UUID`, `List`, `Map` and `Optional` all qualify.
-- Decoded lists and maps are unmodifiable. Struct fields are length-prefixed and read in order; new fields go at the end, and readers ignore trailing data they don't know.
-- Store composed codecs in constants: `list`, `map`, `optional` and `struct` create a new codec on every call.
-
-## Watching values
-
-`watch` notifies when the visible value of a key may have changed: the holder's value while this server holds the entity, the snapshot otherwise. The callback carries no value; read it with `peek`.
-
-```java
-// open a menu for an offline player without a loading state, then keep it in sync
-Watch watch = target.watch(PROFILE, menu::refresh);
-watch.ready()
-        .thenRunAsync(() -> menu.open(target.peek(PROFILE)), mainThread)
-        .exceptionally(error -> {
-            watch.close();
-            return null;
-        });
-// when the menu closes
-watch.close();
-```
-
-- `ready()` completes once `peek` can read the value: immediately if it's held here or already in the snapshot, otherwise when the first load lands, before the first callback. It fails with the exception the load threw if that load fails, and is cancelled if the watch is closed, the key unregistered or the data service closed first.
-- Callbacks and `ready()` stages run on whichever thread caused the change (the writer, the executor or the Redis subscription thread). Keep callbacks fast and hop to your own thread for anything else.
-- Watched snapshots don't expire. Close every watch you open.
+- Store composed codecs in constants. `list` / `map` / `struct` build a new one on every call.
+- The same value must always encode to the same bytes. Use `LinkedHashMap` or `TreeMap` inside `map`.
+- Decoded lists and maps are read-only.
+- Value types need `equals`.
 
 ## Decimal counters
 
-`dbCounter` and `memoryLong` accept `scale(int)` (0 to 18). The key still stores and exchanges a `long` in minor units; the scale only drives conversion:
+A counter key always stores a `long`. `scale(n)` only converts to and from decimals, with n from 0 to 18.
 
 ```java
-long units = coins.toUnits(new BigDecimal("19.99"), RoundingMode.UNNECESSARY); // 1999
-long fromVault = coins.toUnits(amount, RoundingMode.DOWN);                     // double input
-BigDecimal shown = coins.toDecimal(units);                                    // 19.99, always `scale` digits
-double forVault = coins.toDouble(units);
+SortableDbCounterKey<UUID> COINS = player.dbCounter(Key.sparrow("coins")).scale(2).sortable().register();
+
+long units = COINS.toUnits(new BigDecimal("19.99"), RoundingMode.UNNECESSARY);   // 1999
+long fromDouble = COINS.toUnits(12.5, RoundingMode.DOWN);                        // 1250
+BigDecimal shown = COINS.toDecimal(1999);                                        // 19.99
+double asDouble = COINS.toDouble(1999);
 ```
 
-`toUnits(double, ...)` treats a double as the decimal it prints as, so `0.57` becomes 57. Arithmetic on doubles before converting still carries double errors. Never change the scale of a key that has data; existing values would be read 10^n times off.
+Never change the `scale` of a key that already has data. `memoryLong` supports it as well.
+
+## Unregistering and deleting
+
+```java
+player.unregister(MANA);                 // unregister a key, its data stays in the database
+player.purge(Key.sparrow("mana"));       // delete this data for every entity, unregister it on every server first
+player.entity(uuid).delete();            // delete everything of one entity, no server may have it online
+```
+
+Key ids are at most 64 characters and must not contain `.`.
+
+## No map keys
+
+A key holds exactly one value.
+
+| Situation | What to do |
+|---|---|
+| The entries are fixed or come from config | register one key per entry, such as one counter key per currency |
+| The entries are not fixed, but there are few | put the whole collection into one value, such as `MemoryKey<UUID, List<Home>>` |
+| There are many, or they need queries or constraints | your own table with a view key |
 
 ## Limitations
 
-- Redis and the database are assumed to be available. Lost messages and infrastructure failures are not compensated.
-- An override that arrives while the holder is doing its final save on `offline` can be lost: the save writes the old value back, and the released holder drops the message.
-- A collection kept inside one value is stored as a single row and rewritten as a whole on every change.
+- The database and Redis are assumed to be always available. Roster keys repair themselves after a reconnect. Everywhere else a lost cross-server message is not sent again: other servers' snapshots update only when they expire and reload, and a watched or pinned snapshot only on the next change.
+- An `override` that lands exactly during an entity's final save on going `offline` can be overwritten by the old value.
+- A collection kept inside one value is stored as a single row, and changing one item rewrites the whole value.
