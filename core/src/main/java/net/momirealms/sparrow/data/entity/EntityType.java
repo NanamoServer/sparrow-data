@@ -13,11 +13,13 @@ import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 public interface EntityType<K> {
 
@@ -56,6 +58,12 @@ public interface EntityType<K> {
 
     @NotNull
     <E> DbMapCounterKeyBuilder<K, E> dbMapCounter(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec);
+
+    // loader 按实体 ID 从宿主自己的存储里读出当前数据, 结果不能是 null, 没有数据时返回空集合或 Optional.empty().
+    // 冷加载, 收到失效和每次 read 都会调用它, 可能在任意线程上, 它自己负责离开调用线程.
+    // 读出的值由所有读取方共享, 只能当作不可变对象使用, 并且要有按内容比较的 equals, watch 靠它判断值有没有变
+    @NotNull
+    <T> ViewKeyBuilder<K, T> view(@NotNull Key id, @NotNull Function<K, CompletableFuture<T>> loader);
 
     @NotNull
     CompletableFuture<Void> unregister(@NotNull DataKey<K> key);

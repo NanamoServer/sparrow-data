@@ -118,6 +118,15 @@ public final class SnapshotCache<K> {
         });
     }
 
+    // 重读一个普通键的快照, future 在这次调用之后发起的那一轮读取落进快照时完成, 读取失败时带着异常失败.
+    // 快照里没有这个对象时没人在看, 不读, 立即完成
+    @NotNull
+    public CompletableFuture<Void> reload(@NotNull K id, @NotNull String keyId) {
+        Map<Slot, SingleFlightLoader<?>> flights = this.nodes.policy().getIfPresentQuietly(new Node<>(id, keyId));
+        SingleFlightLoader<?> flight = flights == null ? null : flights.get(WHOLE);
+        return flight == null ? CompletableFuture.completedFuture(null) : flight.reload();
+    }
+
     // 持有方下线落库期间, 这个实体这些键的快照不重读. 这段时间读到的可能是落库之前的旧值, 收到的失效等 unfence 时一起处理
     public void fence(@NotNull K id, @NotNull Set<String> keyIds) {
         this.fences.put(id, new Fence<>(keyIds));

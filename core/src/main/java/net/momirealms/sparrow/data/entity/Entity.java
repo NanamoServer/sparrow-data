@@ -9,6 +9,7 @@ import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
 import net.momirealms.sparrow.data.key.MemoryMapKey;
 import net.momirealms.sparrow.data.key.ValueKey;
+import net.momirealms.sparrow.data.key.ViewKey;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -72,6 +73,17 @@ public interface Entity<K> {
 
     @NotNull
     <E> Watch watch(@NotNull MapKey<K, E, ?> key, @NotNull E entry, @NotNull Runnable onChange);
+
+    @NotNull
+    <T> Pin pin(@NotNull ValueKey<K, T> key);
+
+    @NotNull
+    <E> Pin pin(@NotNull MapKey<K, E, ?> key, @NotNull E entry);
+
+    // 视图背后的数据变了之后调用. 本服有这个快照时重读, 并通知其他服务器重读.
+    // future 在本服这次重读写进快照后完成, 重读失败时带着 loader 的异常失败, 快照保留旧值; 本服没有这个快照时立即完成
+    @NotNull
+    CompletableFuture<Void> invalidate(@NotNull ViewKey<K, ?> key);
 
     @Nullable
     <T> T peek(@NotNull ValueKey<K, T> key);

@@ -43,4 +43,7 @@ public interface Transaction {
     <K, E> OptionalLong take(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long amount);
 
     <K, E> boolean remove(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry);
+
+    // 标记这次事务回滚. body 照常 return, 返回值仍然交给调用方, 已经执行的写入全部撤销
+    void rollback();
 }

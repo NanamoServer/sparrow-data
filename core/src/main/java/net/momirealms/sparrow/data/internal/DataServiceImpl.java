@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
-import java.util.function.Predicate;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 @ApiStatus.Internal
@@ -49,13 +49,12 @@ public final class DataServiceImpl implements DataService {
         this.snapshotExpiry = snapshotExpiry;
     }
 
-    // 类型名会拼进 SQL 表名, 限制为 1 到 32 个 [a-z0-9_] 字符. 存储的准备在调用线程上同步执行, 完成后才开始接收这个类型的消息
+    // 类型名会拼进 SQL 表名, 限制为 1 到 32 个 [a-z0-9_] 字符. 这里不建表, 表在这个类型第一次要访问存储时才建
     @NotNull
     @Override
     public synchronized <K> EntityType<K> registerEntityType(@NotNull String name, @NotNull EntityIdCodec<K> idCodec) {
         if (!ENTITY_TYPE_NAME.matcher(name).matches()) throw new IllegalArgumentException("Entity type name must be 1 to 32 characters of [a-z0-9_]: " + name);
         if (this.entityTypes.containsKey(name)) throw new IllegalArgumentException("Entity type is already registered: " + name);
-        this.storage.prepare(name);
         EntityTypeImpl<K> type = new EntityTypeImpl<>(this, name, idCodec);
         this.entityTypes.put(name, type);
         this.messenger.listen(name, type);
@@ -64,7 +63,7 @@ public final class DataServiceImpl implements DataService {
 
     @NotNull
     @Override
-    public CompletableFuture<Boolean> transaction(@NotNull Predicate<Transaction> body) {
+    public <R> CompletableFuture<R> transaction(@NotNull Function<Transaction, R> body) {
         return CompletableFuture.supplyAsync(() -> new TransactionImpl(this.storage).run(body), this.executor);
     }
 

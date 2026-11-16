@@ -1,6 +1,7 @@
 package net.momirealms.sparrow.data.internal;
 
 import net.momirealms.sparrow.data.entity.Entity;
+import net.momirealms.sparrow.data.entity.Pin;
 import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.DbKeyImpl;
@@ -8,6 +9,7 @@ import net.momirealms.sparrow.data.internal.key.DbMapCounterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
+import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.DbCounterKey;
@@ -19,6 +21,7 @@ import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
 import net.momirealms.sparrow.data.key.MemoryMapKey;
 import net.momirealms.sparrow.data.key.ValueKey;
+import net.momirealms.sparrow.data.key.ViewKey;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -151,7 +154,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @NotNull
     @Override
     public <T> Watch watch(@NotNull ValueKey<K, T> key, @NotNull Runnable onChange) {
-        return this.type.watches().watch(this.id, (ValueKeyImpl<K, T>) key, onChange);
+        return this.type.watches().watch(this.id, key, onChange);
     }
 
     @NotNull
@@ -161,15 +164,37 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.type.watches().watch(this.id, impl, impl.entryCodec().encode(entry), onChange);
     }
 
-    // 内存键在本服持有时直接读容器, 其他情况读快照. 读取函数在调用之前就编码好实体 ID, 交给快照后不会再抛异常
+    @NotNull
+    @Override
+    public <T> Pin pin(@NotNull ValueKey<K, T> key) {
+        return this.type.watches().watch(this.id, key, null);
+    }
+
+    @NotNull
+    @Override
+    public <E> Pin pin(@NotNull MapKey<K, E, ?> key, @NotNull E entry) {
+        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
+        return this.type.watches().watch(this.id, impl, impl.entryCodec().encode(entry), null);
+    }
+
+    // 本服的重读在调用线程上发起, 其他服靠广播的失效重读. 本服不会收到这条广播, 所以只读一次
+    @NotNull
+    @Override
+    public CompletableFuture<Void> invalidate(@NotNull ViewKey<K, ?> key) {
+        String keyId = ((ViewKeyImpl<K, ?>) key).storageKey().id();
+        EntityRef ref = this.ref();
+        CompletableFuture<Void> reloaded = this.type.snapshots().reload(this.id, keyId);
+        this.type.service().messenger().invalidateOthers(this.type.name(), ref.entityId(), keyId);
+        return reloaded;
+    }
+
+    // 内存键在本服持有时直接读容器, 其他情况读快照
     @Nullable
     @Override
     public <T> T peek(@NotNull ValueKey<K, T> key) {
-        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return held.get(impl);
-        EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().read(ref, impl));
+        if (held != null) return held.get((ValueKeyImpl<K, T>) key);
+        return this.type.snapshots().peek(this.id, ((AbstractDataKey<K>) key).storageKey().id(), this.type.reader(this.id, key));
     }
 
     @Nullable
@@ -204,10 +229,9 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @NotNull
     @Override
     public <T> CompletableFuture<T> read(@NotNull ValueKey<K, T> key) {
-        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return CompletableFuture.completedFuture(held.get(impl));
-        return this.type.db().read(this.ref(), impl);
+        if (held != null) return CompletableFuture.completedFuture(held.get((ValueKeyImpl<K, T>) key));
+        return this.type.reader(this.id, key).get();
     }
 
     @NotNull
@@ -323,7 +347,13 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         if (this.type.held(this.id) != null) throw new IllegalStateException("Entity is held by this server: " + this.type.name() + " " + this.id);
         EntityRef ref = this.ref();
         DataServiceImpl service = this.type.service();
-        return CompletableFuture.runAsync(() -> service.storage().deleteEntity(ref), service.executor())
+        return CompletableFuture.runAsync(
+                () -> {
+                    this.type.prepareStorage();
+                    service.storage().deleteEntity(ref);
+                },
+                service.executor()
+        )
                 .thenRun(() -> service.messenger().invalidate(this.type.name(), ref.entityId(), null, null));
     }
 

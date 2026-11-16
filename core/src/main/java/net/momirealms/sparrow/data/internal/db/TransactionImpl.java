@@ -20,10 +20,12 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
-import java.util.function.Predicate;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 @ApiStatus.Internal
@@ -32,23 +34,35 @@ public final class TransactionImpl implements Transaction {
 
     private final Map<Change<?>, Object> changes = new LinkedHashMap<>(); // 改过的对象 -> 最后写进去的值
     private EntityStorage attempt;
+    private boolean rollback;
 
     public TransactionImpl(@NotNull EntityStorage storage) {
         this.storage = storage;
     }
 
-    // 在存储的事务里执行 body. 死锁时存储会回滚并重跑 body, 所以每一轮都换上这一轮的连接, 改动记录从空开始;
-    // 提交之后按最后一轮的改动, 先用每个对象最后写进去的值更新本服快照, 再广播失效, 别的服重读时一定能读到提交的值. 回滚了快照和广播都不动
-    public boolean run(@NotNull Predicate<Transaction> body) {
+    // 在存储的事务里执行 body. 死锁时存储会回滚并重跑 body, 所以每一轮都换上这一轮的连接, 改动记录和回滚标记从头开始;
+    // 提交之后按最后一轮的改动, 先用每个对象最后写进去的值更新本服快照, 再广播失效, 别的服重读时一定能读到提交的值. 回滚了快照和广播都不动.
+    // 返回的是最后一轮 body 的返回值, 回滚时也一样
+    @Nullable
+    public <R> R run(@NotNull Function<Transaction, R> body) {
+        List<R> result = new ArrayList<>(1);
         boolean committed = this.storage.transaction(attempt -> {
             this.attempt = attempt;
             this.changes.clear();
-            return body.test(this);
+            this.rollback = false;
+            result.clear();
+            result.add(body.apply(this));
+            return !this.rollback;
         });
         if (committed) {
             this.changes.forEach(Change::written);
         }
-        return committed;
+        return result.getFirst();
+    }
+
+    @Override
+    public void rollback() {
+        this.rollback = true;
     }
 
     @Override

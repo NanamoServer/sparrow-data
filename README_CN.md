@@ -7,7 +7,7 @@
 - **内存键**：数据在当前持有这个实体的那台服务器的内存里，读写就是普通的内存调用，定时落库，`offline` 时再落一次。
 - **DB 键**：数据以数据库为准，每次写入都直接落到存储上，用原子语句或 CAS 循环完成，所以任何服务器随时都能写。
 
-其他服务器通过快照读这两种数据，快照靠 Redis 上的失效消息刷新。存储内置 MySQL、MariaDB、PostgreSQL 三种实现，其他存储实现 `EntityStorage` 即可。
+其他服务器通过快照读这两种数据，快照靠 Redis 上的失效消息刷新。存储内置 MySQL、MariaDB、PostgreSQL 三种实现。
 
 ## 引入
 
@@ -50,7 +50,7 @@ data.close();
 
 `build()` 会在 broker 上注册数据层的消息，要在 `broker.subscribe()` 之前调用，并且同一个频道上的每台服务器都在同样的位置调用。存储、线程池和 broker 归宿主所有，由宿主在 `data.close()` 之后关闭。
 
-注册实体类型时建表：`{前缀}{类型}_data` 和 `{前缀}{类型}_ranked`。前缀最多 24 个字符，只能用 `[a-z0-9_]`。
+一个实体类型注册第一个数据在存储里的键时建表：`{前缀}{类型}_data` 和 `{前缀}{类型}_ranked`。只有视图键的类型不建表。前缀最多 24 个字符，只能用 `[a-z0-9_]`。
 
 ## 实体类型和键
 
@@ -113,10 +113,14 @@ entity.take(coins, price).thenAccept(balance -> {
 entity.update(profile, current -> current.withMotto("hello"));
 entity.putIfAbsent(mailbox, mailId, mail);
 
-data.transaction(tx -> {
-    if (tx.take(from, coins, amount).isEmpty()) return false; // 返回 false 就回滚
+CompletableFuture<TransferResult> result = data.transaction(tx -> {
+    OptionalLong balance = tx.take(from, coins, amount);
+    if (balance.isEmpty()) {
+        tx.rollback();                        // 标记回滚, 返回值照样交给调用方
+        return TransferResult.insufficient();
+    }
     tx.add(to, coins, amount);
-    return true;
+    return TransferResult.success(balance.getAsLong());
 });
 
 player.top(coins, 0, 10);
@@ -124,7 +128,7 @@ player.rankOf(coins, uuid);
 ```
 
 - `update` 是以存储里的字节为条件的 CAS 循环，operator 可能执行多次，不能有副作用。新值编码后和原来字节相同时不写库，也不广播。
-- 遇到死锁时事务体会重跑。事务体抛出的任何异常都会让事务回滚，包括 `Error`。提交之后，先用事务写进去的值更新本服已有的快照，再广播失效消息；回滚时两者都不做。
+- 事务体的返回值就是 future 的结果。正常返回时提交，调用过 `tx.rollback()` 时回滚，返回值仍然交给调用方。遇到死锁时事务体会重跑。事务体抛出的任何异常都会让事务回滚，包括 `Error`。提交之后，先用事务写进去的值更新本服已有的快照，再广播失效消息；回滚时两者都不做。
 - 计数键里不存在的值或条目当作 0。余额不够时 `take` 失败，什么都不写。
 - `top` 和 `rankOf` 读的是排行表。内存键落库时才写进排行表，所以排行最多落后一个落库间隔。
 
@@ -140,6 +144,34 @@ refresh(target.peek(likesKey));
 未加载时 `peek` 返回 null；首读得到 0 也会通知。已有值不补发首值。活动订阅共享本服快照和一次在途读取。用完调用 `watch.close()`，最后一个订阅关闭后快照恢复正常过期。回调在发布变化的线程执行，可能并发；回调只做快速、线程安全的工作。关闭不等待已经开始的回调。
 
 内存标量跟随 `peek`：本服持有时，本地写入或覆盖立即可见，其他服仍通过 publish 或落库后的快照跟进。取得或释放持有权时，仅在可读值改变时通知。释放先于最终落库，因此可能暂时看到旧快照或 null，再收到最终值。DB 标量不切换读源。
+
+值有没有变按 `equals` 判断，顶层的 `byte[]` 按内容比较。值的类型没有按内容比较的 `equals` 时，每次重读都会通知。
+
+只需要同步读取、不关心变化时用 `pin`，它只让快照保持加载，不比较也不通知：
+
+```java
+Pin pin = wallet.pin(coins);
+pin.ready().thenRun(() -> balance = wallet.peek(coins));   // ready 之后 peek 一定能读到
+// 玩家退出时
+pin.close();
+```
+
+`Watch` 就是带回调的 `Pin`，两者的 `ready()` 和 `close()` 含义相同。
+
+## 视图键
+
+数据在宿主自己的表里、但想复用快照和跨服失效时，用视图键。宿主提供按实体 ID 加载的函数，改完数据后调用 `invalidate`：
+
+```java
+ViewKey<UUID, List<Home>> homes = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
+
+List<Home> current = player.entity(owner).peek(homes);      // 同步读快照
+homeStore.create(home).thenCompose(created -> player.entity(owner).invalidate(homes));
+```
+
+- loader 返回 `CompletableFuture`，自己负责离开调用线程；结果不能是 `null`，没有数据时返回空集合或 `Optional.empty()`。冷加载、收到失效和每次 `read` 都会调用它。
+- `invalidate` 让本服重读快照，并通知其他服务器重读。future 在本服这次重读写进快照后完成，本服没有这个快照时立即完成；重读失败时带着 loader 的异常失败，快照保留旧值。
+- `peek`、`read`、`watch`、`pin` 对视图键的用法和其他普通键一样。读出的值由所有读取方共享，只能当作不可变对象使用。
 
 ## 值的编解码
 
@@ -174,6 +206,7 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 
 - 同一个值每次都要编出同样的字节，`decode(encode(v))` 要等于 `v`。编码不稳定时结果仍然正确，只是值不变的 update 也会写库。map 按迭代顺序编码，在意这一点就用 `LinkedHashMap` 或 `TreeMap`。
 - `decode` 可能在 Redis 的订阅线程上执行，所以要快，并且线程安全。返回的值不能引用传进来的数组。
+- 值的类型要有按内容比较的 `equals`，`watch` 靠它判断值有没有变。record、`String`、`UUID`、`List`、`Map`、`Optional` 都满足。
 - 解码出来的 list 和 map 不可修改。struct 的字段带长度前缀、按顺序读；新字段加在末尾，读的一方会忽略自己不认识的尾部数据。
 - 组合出来的 codec 存成常量，`list`、`map`、`optional`、`struct` 每次调用都会新建一个 codec。
 
@@ -194,7 +227,7 @@ watch.ready()
 watch.close();
 ```
 
-- `ready()` 在 `peek` 能读到值时完成：本服持有或快照已经加载过时立刻完成，否则在首次加载完成时完成，并且先于第一次回调。首次加载失败时带着存储的异常失败；在此之前 watch 被关闭、键被注销或数据层关闭时被取消。
+- `ready()` 在 `peek` 能读到值时完成：本服持有或快照已经加载过时立刻完成，否则在首次加载完成时完成，并且先于第一次回调。首次加载失败时带着加载抛出的异常失败；在此之前 watch 被关闭、键被注销或数据层关闭时被取消。
 - 回调和 `ready()` 后面的步骤在触发改动的线程上执行，可能是写入线程、Executor 或 Redis 的订阅线程。回调要快，其他事情切到自己的线程去做。
 - 有人观察的快照不会过期，打开的 watch 都要关掉。
 

@@ -24,6 +24,8 @@ public final class SingleFlightLoader<V> {
     private boolean loading;
     private boolean reloadAfter;
     private boolean discardResult;
+    private @Nullable CompletableFuture<Void> landing;      // 等在途这一轮读取的 reload 调用方
+    private @Nullable CompletableFuture<Void> landingAfter; // 等下一轮读取的 reload 调用方
 
     // 一个快照对象的值和它的读取状态.
     // loader 不抛异常, 失败通过返回的 future 表达; 它只发起读取, 不在调用线程上等结果. 值被换掉之后在锁外调用 replaced,
@@ -79,6 +81,32 @@ public final class SingleFlightLoader<V> {
         }
     }
 
+    // 和 invalidate 一样发起或排上一轮读取, 另外返回一个 future, 在这次调用之后才发起的那一轮读取结束时完成.
+    // 正在读的那一轮可能发生在修改之前, 所以这时等的是下一轮
+    @NotNull
+    public CompletableFuture<Void> reload() {
+        CompletableFuture<Void> landed;
+        boolean start;
+        synchronized (this) {
+            start = !this.loading;
+            if (start) {
+                this.beginLoad();
+                this.landing = new CompletableFuture<>();
+                landed = this.landing;
+            } else {
+                this.reloadAfter = true;
+                if (this.landingAfter == null) {
+                    this.landingAfter = new CompletableFuture<>();
+                }
+                landed = this.landingAfter;
+            }
+        }
+        if (start) {
+            this.load();
+        }
+        return landed;
+    }
+
     // 本服写入后用返回值更新快照. 正在进行的读比这个值旧, 读完时丢弃它的结果
     public void put(@Nullable V value) {
         synchronized (this) {
@@ -104,10 +132,12 @@ public final class SingleFlightLoader<V> {
     }
 
     // 先写入这次的结果, 再决定要不要再读. 这次的结果比快照里的新, 写进去不会倒退, 持续被修改时快照也能一路更新.
-    // 读失败时不再重读, 等下一次失效或 peek
+    // 读失败时不再重读, 等下一次失效或 peek, 等下一轮的 reload 调用方也跟着这次失败结束
     private void complete(@Nullable V result, @Nullable Throwable error) {
         boolean again;
         boolean accepted;
+        CompletableFuture<Void> landed;
+        CompletableFuture<Void> skipped = null;
         synchronized (this) {
             this.loading = false;
             accepted = error == null && !this.discardResult;
@@ -116,9 +146,15 @@ public final class SingleFlightLoader<V> {
                 this.loaded = true;
             }
             again = (error == null) && this.reloadAfter;
+            landed = this.landing;
             if (again) {
                 this.beginLoad();
+                this.landing = this.landingAfter;
+            } else {
+                this.landing = null;
+                skipped = this.landingAfter;
             }
+            this.landingAfter = null;
         }
         if (accepted) {
             this.replaced.run();
@@ -126,6 +162,10 @@ public final class SingleFlightLoader<V> {
         if (error != null) {
             LOGGER.error("Failed to load snapshot {}", this.name, error);
             this.failed.accept(error);
+            if (landed != null) landed.completeExceptionally(error);
+            if (skipped != null) skipped.completeExceptionally(error);
+        } else if (landed != null) {
+            landed.complete(null);
         }
         if (again) {
             this.load();

@@ -11,6 +11,7 @@ import net.momirealms.sparrow.data.internal.key.KeyRegistry;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
+import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbCounterKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbMapCounterKeyBuilderImpl;
@@ -18,6 +19,7 @@ import net.momirealms.sparrow.data.internal.key.builder.DbMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryMapKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.key.builder.ViewKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.memory.Backfill;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.internal.memory.OverrideService;
@@ -30,6 +32,7 @@ import net.momirealms.sparrow.data.key.EntryKeyCodec;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.SortableKey;
 import net.momirealms.sparrow.data.key.ValueCodec;
+import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbMapCounterKeyBuilder;
@@ -37,6 +40,7 @@ import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.EntityStorage;
 import net.momirealms.sparrow.data.storage.RankRow;
@@ -53,6 +57,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @ApiStatus.Internal
 public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Listener {
@@ -61,7 +67,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     private final DataServiceImpl service;
     private final String name;
     private final EntityIdCodec<K> idCodec;
-    private final KeyRegistry<K> keys = new KeyRegistry<>();
+    private final KeyRegistry<K> keys = new KeyRegistry<>(this::prepareStorage);
     private final WatchHub<K> watches;
     private final SnapshotCache<K> snapshots;
     private final DbOperations<K> db;
@@ -69,6 +75,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     private final ResidenceImpl<K> residence;
     private final OverrideService<K> overrides;
     private final Backfill<K> backfill;
+    private boolean storagePrepared;
 
     // 一个实体类型在运行时的实现, 注册的键都登记在它自己的键表里. 它也是这个类型的消息接收方, 收到失效让对应的快照重读, 收到 publish 直接更新快照
     public EntityTypeImpl(@NotNull DataServiceImpl service, @NotNull String name, @NotNull EntityIdCodec<K> idCodec) {
@@ -156,7 +163,13 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         return new DbMapCounterKeyBuilderImpl<>(this, id, entryCodec);
     }
 
-    // DB 键只需要移出键表. 内存键移出键表后, 每个持有中的实体把这个键排进落库链, 落库时摘掉槽, future 在全部落库后结束.
+    @NotNull
+    @Override
+    public <T> ViewKeyBuilder<K, T> view(@NotNull Key id, @NotNull Function<K, CompletableFuture<T>> loader) {
+        return new ViewKeyBuilderImpl<>(this, id, loader);
+    }
+
+    // DB 键和视图键只需要移出键表. 内存键移出键表后, 每个持有中的实体把这个键排进落库链, 落库时摘掉槽, future 在全部落库后结束.
     // 两种键都丢掉本服这个键的快照, 库里的数据保留, 要删数据用 purge. 注销之后调用方不再使用旧的键对象
     @NotNull
     @Override
@@ -187,7 +200,13 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     public CompletableFuture<Void> purge(@NotNull Key id) {
         if (this.keys.get(id) != null) throw new IllegalStateException("Data key is still registered: " + id);
         String keyId = id.toString();
-        return CompletableFuture.runAsync(() -> this.service.storage().purge(this.name, keyId), this.service.executor())
+        return CompletableFuture.runAsync(
+                () -> {
+                    this.prepareStorage();
+                    this.service.storage().purge(this.name, keyId);
+                },
+                this.service.executor()
+        )
                 .thenRun(() -> this.service.messenger().invalidate(this.name, null, keyId, null));
     }
 
@@ -257,6 +276,24 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         byte[] encoded = this.idCodec.encode(id);
         if (encoded.length > MAX_ENTITY_ID_LENGTH) throw new IllegalArgumentException("Encoded entity id is longer than " + MAX_ENTITY_ID_LENGTH + " bytes: " + id);
         return new EntityRef(this.name, encoded);
+    }
+
+    // 让存储为这个类型做好准备, SQL 实现在这里建表. 第一次要访问存储时才做: 注册第一个数据在存储里的键, purge 或删除实体.
+    // 只注册视图键的类型不会走到这里
+    public synchronized void prepareStorage() {
+        if (this.storagePrepared) return;
+        this.service.storage().prepare(this.name);
+        this.storagePrepared = true;
+    }
+
+    // 普通键读取权威值的函数, 快照的加载和 read 都用它. 视图键调用宿主的 loader, 其他键读存储.
+    // 实体 ID 在这里编码, 超长时在调用线程上抛出, 返回的函数不会再抛异常
+    @NotNull
+    public <T> Supplier<CompletableFuture<T>> reader(@NotNull K id, @NotNull ValueKey<K, T> key) {
+        EntityRef ref = this.ref(id);
+        if (key instanceof ViewKeyImpl<K, T> view) return () -> view.load(id);
+        ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
+        return () -> this.db.read(ref, impl);
     }
 
     // 本服持有这个实体时返回它的持有容器, 否则返回 null

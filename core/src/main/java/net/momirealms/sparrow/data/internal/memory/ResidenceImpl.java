@@ -6,6 +6,7 @@ import net.momirealms.sparrow.data.internal.EntityTypeImpl;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.StorageKey;
+import net.momirealms.sparrow.data.storage.StoredEntity;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -92,7 +93,14 @@ public final class ResidenceImpl<K> implements Residence<K> {
     // 在 Executor 上读库并解码成槽. online 和运行中注册内存键时的补读都用它
     @NotNull
     CompletableFuture<HeldEntity.Slots<K>> loadSlots(@NotNull EntityRef ref, @NotNull List<AbstractDataKey<K>> keys) {
-        return CompletableFuture.supplyAsync(() -> HeldEntity.decode(keys, this.service.storage().load(ref, storageKeys(keys))), this.service.executor());
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    // 没有内存键的类型不读库, 它的存储可能还没准备
+                    StoredEntity stored = keys.isEmpty() ? new StoredEntity(Map.of(), Map.of()) : this.service.storage().load(ref, storageKeys(keys));
+                    return HeldEntity.decode(keys, stored);
+                },
+                this.service.executor()
+        );
     }
 
     // 先释放容器, 再把被观察的内存键的值交给快照, 最后移出持有表, 观察方看到的值不会断档. 落库完成之前这个实体内存键的快照不重读,

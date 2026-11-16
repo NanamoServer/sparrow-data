@@ -1,5 +1,6 @@
 package net.momirealms.sparrow.data.storage;
 
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -9,7 +10,8 @@ import java.util.Map;
 import java.util.OptionalLong;
 import java.util.function.Predicate;
 
-/** 持久化服务的接口. 由宿主实现或使用内置的 SQL 实现, 数据层在宿主提供的线程上同步调用. */
+/** 持久化服务的接口, 由内置的 SQL 实现提供, <strong>不供宿主自行实现</strong>. 数据层在宿主提供的线程上同步调用. */
+@ApiStatus.NonExtendable
 public interface EntityStorage {
 
     void prepare(@NotNull String entityType);

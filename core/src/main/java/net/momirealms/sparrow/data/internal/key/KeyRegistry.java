@@ -14,7 +14,13 @@ import java.util.Map;
 public final class KeyRegistry<K> {
     private static final int MAX_ID_LENGTH = 64;
 
+    private final Runnable prepareStorage;
     private volatile Table<K> table = Table.of(Map.of());
+
+    // prepareStorage 让存储为这个实体类型做好准备, 可以重复调用. 视图键的数据不在存储里, 注册它时不调用
+    public KeyRegistry(@NotNull Runnable prepareStorage) {
+        this.prepareStorage = prepareStorage;
+    }
 
     @Nullable
     public AbstractDataKey<K> get(@NotNull Key id) {
@@ -27,6 +33,10 @@ public final class KeyRegistry<K> {
         if (id.length() > MAX_ID_LENGTH) throw new IllegalArgumentException("Data key id is longer than " + MAX_ID_LENGTH + " characters: " + id);
         if (id.indexOf('.') >= 0) throw new IllegalArgumentException("Data key id must not contain '.': " + id);
         if (this.table.byId().containsKey(key.id())) throw new IllegalArgumentException("Data key is already registered: " + id);
+        // 键进表之前存储已经就绪, 之后任何人拿到这个键都能直接读写
+        if (!(key instanceof ViewKeyImpl<?, ?>)) {
+            this.prepareStorage.run();
+        }
         Map<Key, AbstractDataKey<K>> byId = new HashMap<>(this.table.byId());
         byId.put(key.id(), key);
         this.table = Table.of(byId);

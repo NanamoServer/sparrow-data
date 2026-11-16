@@ -7,7 +7,7 @@ A per-entity data layer for Minecraft server networks. Data is attached to entit
 - **Memory keys** live on the one server that currently holds the entity. Reads and writes are plain in-memory calls; the data is saved on an interval and on `offline`.
 - **DB keys** are authoritative in the database. Every write goes straight to storage as an atomic statement or a CAS loop, so any server can write at any time.
 
-Other servers see both kinds through snapshots that are invalidated over Redis. Storage ships for MySQL, MariaDB and PostgreSQL; anything else can implement `EntityStorage`.
+Other servers see both kinds through snapshots that are invalidated over Redis. Storage ships for MySQL, MariaDB and PostgreSQL.
 
 ## Installation
 
@@ -50,7 +50,7 @@ data.close();
 
 `build()` registers the data layer's messages on the broker. Call it before `broker.subscribe()`, at the same point on every server of the channel. The storage, executor and broker belong to the host, and the host closes them after `data.close()`.
 
-Tables are created when an entity type is registered: `{prefix}{type}_data` and `{prefix}{type}_ranked`. The prefix is at most 24 characters of `[a-z0-9_]`.
+Tables are created when the first key that stores data is registered on an entity type: `{prefix}{type}_data` and `{prefix}{type}_ranked`. A type that only has view keys gets no tables. The prefix is at most 24 characters of `[a-z0-9_]`.
 
 ## Entity types and keys
 
@@ -113,10 +113,14 @@ entity.take(coins, price).thenAccept(balance -> {
 entity.update(profile, current -> current.withMotto("hello"));
 entity.putIfAbsent(mailbox, mailId, mail);
 
-data.transaction(tx -> {
-    if (tx.take(from, coins, amount).isEmpty()) return false; // false rolls back
+CompletableFuture<TransferResult> result = data.transaction(tx -> {
+    OptionalLong balance = tx.take(from, coins, amount);
+    if (balance.isEmpty()) {
+        tx.rollback();                        // marks the rollback, the return value still reaches the caller
+        return TransferResult.insufficient();
+    }
     tx.add(to, coins, amount);
-    return true;
+    return TransferResult.success(balance.getAsLong());
 });
 
 player.top(coins, 0, 10);
@@ -124,7 +128,7 @@ player.rankOf(coins, uuid);
 ```
 
 - `update` is a CAS loop on the stored bytes, so its operator may run several times and must be free of side effects. An update that encodes to the same bytes neither writes nor broadcasts.
-- A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. After commit, the values the transaction wrote are put into this server's existing snapshots first, then invalidations are broadcast; a rolled back transaction touches neither.
+- The value a transaction body returns becomes the result of the future. A normal return commits; after `tx.rollback()` the transaction rolls back and the return value still reaches the caller. A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. After commit, the values the transaction wrote are put into this server's existing snapshots first, then invalidations are broadcast; a rolled back transaction touches neither.
 - Counters treat a missing value or entry as 0. `take` fails without writing when the balance is too low.
 - `top` and `rankOf` read the ranking table. Memory keys reach it when they are saved, so their ranking lags by up to one save interval.
 
@@ -140,6 +144,34 @@ refresh(target.peek(likesKey));
 An already available value is not replayed. A cold read returns null; its completion notifies even for a zero count. Watches share the local snapshot and its in-flight load. Callbacks can run concurrently on the publishing threads: keep them fast and pull the latest state. Notifications may coalesce. Call `watch.close()` to unsubscribe; this does not wait for callbacks already running. After the last watch closes, ordinary snapshot expiry resumes.
 
 For memory keys the watch follows the same source as `peek`. Local writes and overrides are visible while held; other servers still see publishes or saved snapshots. Acquiring or releasing ownership only notifies if the visible value changes. Release precedes the final save, so an older snapshot or null may be visible before the final value arrives.
+
+Whether a value changed is decided by `equals`; a top-level `byte[]` is compared by content. A value type without a content-based `equals` notifies on every reload.
+
+When you only need synchronous reads and don't care about changes, use `pin`. It keeps the snapshot loaded and neither compares nor notifies:
+
+```java
+Pin pin = wallet.pin(coins);
+pin.ready().thenRun(() -> balance = wallet.peek(coins));   // peek is guaranteed to read a value after ready
+// when the player quits
+pin.close();
+```
+
+A `Watch` is a `Pin` with a callback; `ready()` and `close()` mean the same on both.
+
+## View keys
+
+Use a view key when the data lives in the host's own tables but should still get snapshots and cross-server invalidation. The host supplies a function that loads by entity id and calls `invalidate` after changing the data:
+
+```java
+ViewKey<UUID, List<Home>> homes = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
+
+List<Home> current = player.entity(owner).peek(homes);      // synchronous snapshot read
+homeStore.create(home).thenCompose(created -> player.entity(owner).invalidate(homes));
+```
+
+- The loader returns a `CompletableFuture` and is responsible for leaving the calling thread. Its result must not be `null`; return an empty collection or `Optional.empty()` when there is no data. It is called on a cold load, on every invalidation and on every `read`.
+- `invalidate` reloads this server's snapshot and tells the other servers to reload theirs. The future completes once this server's reload has landed in the snapshot, or immediately if this server has no snapshot. If the reload fails it fails with the loader's exception and the snapshot keeps the old value.
+- `peek`, `read`, `watch` and `pin` work on view keys like on any other value key. Loaded values are shared by all readers and must be treated as immutable.
 
 ## Values
 
@@ -174,6 +206,7 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 
 - The same value must always encode to the same bytes, and `decode(encode(v))` must equal `v`. Non-deterministic encoding stays correct but turns no-op updates into writes. Maps encode in iteration order, so use `LinkedHashMap` or `TreeMap` when that matters.
 - `decode` may run on the Redis subscription thread, so keep it fast and thread-safe. It must not keep a reference to the input array.
+- Value types need a content-based `equals`; `watch` uses it to decide whether a value changed. Records, `String`, `UUID`, `List`, `Map` and `Optional` all qualify.
 - Decoded lists and maps are unmodifiable. Struct fields are length-prefixed and read in order; new fields go at the end, and readers ignore trailing data they don't know.
 - Store composed codecs in constants: `list`, `map`, `optional` and `struct` create a new codec on every call.
 
@@ -194,7 +227,7 @@ watch.ready()
 watch.close();
 ```
 
-- `ready()` completes once `peek` can read the value: immediately if it's held here or already in the snapshot, otherwise when the first load lands, before the first callback. It fails with the storage exception if that load fails, and is cancelled if the watch is closed, the key unregistered or the data service closed first.
+- `ready()` completes once `peek` can read the value: immediately if it's held here or already in the snapshot, otherwise when the first load lands, before the first callback. It fails with the exception the load threw if that load fails, and is cancelled if the watch is closed, the key unregistered or the data service closed first.
 - Callbacks and `ready()` stages run on whichever thread caused the change (the writer, the executor or the Redis subscription thread). Keep callbacks fast and hop to your own thread for anything else.
 - Watched snapshots don't expire. Close every watch you open.
 

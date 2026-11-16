@@ -2,14 +2,15 @@ package net.momirealms.sparrow.data.internal.watch;
 
 import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.EntityTypeImpl;
+import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.internal.snapshot.SingleFlightLoader;
 import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
+import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.storage.EntityRef;
-import net.momirealms.sparrow.data.storage.StoredValue;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -27,6 +28,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 @ApiStatus.Internal
 public final class WatchHub<K> implements SnapshotCache.Observer<K> {
@@ -36,19 +38,19 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
     private final EntityTypeImpl<K> type;
     private final Map<K, Map<Target, Node>> entities = new ConcurrentHashMap<>();  // 实体 -> 观察目标 -> 节点, 增删都在外层的 compute 里
 
-    // 一个实体类型的 watch. 能看到的值是本服持有时持有容器里的值, 其他情况是快照里的值, 编码之后和上次通知时的字节不同才通知.
-    // 所有改动点只调用 touch, 由这里重新取值比较. 回调不带值, 在触发改动的线程上同步执行
+    // 一个实体类型的 watch 和 pin. 能看到的值是本服持有时持有容器里的值, 其他情况是快照里的值, 和上次通知时不 equals 才通知.
+    // 所有改动点只调用 touch, 由这里重新取值比较. 回调不带值, 在触发改动的线程上同步执行. onChange 为 null 的是 pin, 只固定快照, 不比较也不通知
     public WatchHub(@NotNull EntityTypeImpl<K> type) {
         this.type = type;
     }
 
     @NotNull
-    public <T> Watch watch(@NotNull K id, @NotNull ValueKeyImpl<K, T> key, @NotNull Runnable onChange) {
+    public <T> Watch watch(@NotNull K id, @NotNull ValueKey<K, T> key, @Nullable Runnable onChange) {
         return this.watch(id, new ValueSource<>(id, key), onChange);
     }
 
     @NotNull
-    public <V> Watch watch(@NotNull K id, @NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry, @NotNull Runnable onChange) {
+    public <V> Watch watch(@NotNull K id, @NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry, @Nullable Runnable onChange) {
         return this.watch(id, new EntrySource<>(id, key, entry), onChange);
     }
 
@@ -156,7 +158,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
     // 先登记再让快照加载, 加载完成时的 touch 一定能找到这个节点. 节点第一次建出来时记下当前看到的值, 之后变了才通知.
     // 登记之后已经能读到值时 ready 当场完成, 否则由首次读到值的 refresh 完成
     @NotNull
-    private Watch watch(@NotNull K id, @NotNull Source source, @NotNull Runnable onChange) {
+    private Watch watch(@NotNull K id, @NotNull Source source, @Nullable Runnable onChange) {
         Target target = new Target(source.keyId, source.entry);
         Binding binding = new Binding(id, target, onChange);
         this.entities.compute(id, (ignored, targets) -> {
@@ -177,7 +179,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         Target target = binding.target;
         this.entities.computeIfPresent(id, (ignored, targets) -> {
             Node node = targets.get(target);
-            if (node != null && node.bindings.remove(binding) && node.bindings.isEmpty()) {
+            if (node != null && node.detach(binding)) {
                 targets.remove(target);
             }
             return targets.isEmpty() ? null : targets;
@@ -187,9 +189,10 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         }
     }
 
+    // 顶层的 byte[] 没有按内容比较的 equals, 单独处理
     private static boolean same(@Nullable Object seen, @Nullable Object current) {
         if (seen == current) return true;
-        if (seen instanceof StoredValue.OfBytes(byte[] before) && current instanceof StoredValue.OfBytes(byte[] after)) return Arrays.equals(before, after);
+        if (seen instanceof byte[] before && current instanceof byte[] after) return Arrays.equals(before, after);
         return seen != null && seen.equals(current);
     }
 
@@ -197,11 +200,12 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
     private record Target(@NotNull String keyId, @Nullable String entry) {
     }
 
-    // 一个观察对象和观察它的 watch. seen 是上次通知时看到的值: 编码后的 StoredValue, null 表示没有值, UNLOADED 表示快照还没加载
+    // 一个观察对象和挂在它上面的 watch 与 pin. seen 是最近一次看到的值, null 表示没有值, UNLOADED 表示快照还没加载
     private final class Node {
         private final Source source;
         private final CopyOnWriteArrayList<Binding> bindings = new CopyOnWriteArrayList<>();
         private @Nullable Object seen;
+        private volatile int watchers; // 带回调的绑定个数, 增减都在外层的 compute 里
 
         private Node(@NotNull Source source) {
             this.source = source;
@@ -212,22 +216,37 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         private void attach(@NotNull Binding binding) {
             this.bindings.add(binding);
             binding.node = this;
+            if (binding.onChange != null) {
+                this.watchers++;
+            }
+        }
+
+        // 在外层的 compute 里调用, 返回节点上是不是已经没有绑定
+        private boolean detach(@NotNull Binding binding) {
+            if (!this.bindings.remove(binding)) return false;
+            if (binding.onChange != null) {
+                this.watchers--;
+            }
+            return this.bindings.isEmpty();
         }
 
         private synchronized boolean visible() {
             return this.seen != UNLOADED;
         }
 
-        // 取值和比较在锁里, 并发的 touch 按顺序推进 seen; 回调在锁外. 第一次读到值时先让 ready 完成, 再通知
+        // 取值和比较在锁里, 并发的 touch 按顺序推进 seen; 回调在锁外. 第一次读到值时先让 ready 完成, 再通知.
+        // 节点上只有 pin 时不比较, seen 照样跟到最新, 之后加进来的 watch 从这个值算起
         private void refresh() {
             List<Binding> listeners;
             boolean first;
             synchronized (this) {
                 Object current = this.source.observe();
                 // 快照还没加载时不通知, 持有方刚下线时能看到的值不会先变成空
-                if (current == UNLOADED || same(this.seen, current)) return;
+                if (current == UNLOADED) return;
                 first = this.seen == UNLOADED;
+                boolean changed = first || (this.watchers > 0 && !same(this.seen, current));
                 this.seen = current;
+                if (!changed) return;
                 listeners = List.copyOf(this.bindings);
             }
             int size = listeners.size();
@@ -261,12 +280,12 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
     private final class Binding implements Watch {
         private final K id;
         private final Target target;
-        private final Runnable onChange;
+        private final @Nullable Runnable onChange;
         private final AtomicBoolean closed = new AtomicBoolean();
         private final CompletableFuture<Void> ready = new CompletableFuture<>();
         private Node node;
 
-        private Binding(@NotNull K id, @NotNull Target target, @NotNull Runnable onChange) {
+        private Binding(@NotNull K id, @NotNull Target target, @Nullable Runnable onChange) {
             this.id = id;
             this.target = target;
             this.onChange = onChange;
@@ -291,8 +310,9 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             this.ready.completeExceptionally(new CancellationException(reason));
         }
 
-        // 回调来自宿主, 它的异常在这里记日志, 不影响其他 watch 和触发改动的调用方
+        // 回调来自宿主, 它的异常在这里记日志, 不影响其他 watch 和触发改动的调用方. pin 没有回调
         private void notifyChange() {
+            if (this.onChange == null) return;
             try {
                 this.onChange.run();
             } catch (RuntimeException exception) {
@@ -323,7 +343,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             return this.memory ? WatchHub.this.type.held(this.id) : null;
         }
 
-        // 编码后的 StoredValue, null 表示没有值, UNLOADED 表示快照还没加载
+        // 当前能看到的值, null 表示没有值, UNLOADED 表示快照还没加载
         @Nullable
         protected abstract Object observe();
 
@@ -334,35 +354,35 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
     }
 
     private final class ValueSource<T> extends Source {
-        private final ValueKeyImpl<K, T> key;
+        private final ValueKey<K, T> key;
+        private final Supplier<CompletableFuture<T>> reader;
 
-        private ValueSource(@NotNull K id, @NotNull ValueKeyImpl<K, T> key) {
-            super(id, key.storageKey().id(), null, key instanceof MemoryDataKey<?>);
+        private ValueSource(@NotNull K id, @NotNull ValueKey<K, T> key) {
+            super(id, ((AbstractDataKey<K>) key).storageKey().id(), null, key instanceof MemoryDataKey<?>);
             this.key = key;
+            this.reader = WatchHub.this.type.reader(id, key);
         }
 
         @Nullable
         @Override
         protected Object observe() {
             HeldEntity<K> held = this.held();
-            if (held != null) return this.key.form().store(held.get(this.key));
+            if (held != null) return held.get((ValueKeyImpl<K, T>) this.key);
             SingleFlightLoader.Loaded<T> loaded = WatchHub.this.type.snapshots().loaded(this.id, this.keyId, null);
-            if (loaded == null) return UNLOADED;
-            T value = loaded.value();
-            return value == null ? null : this.key.form().store(value);
+            return loaded == null ? UNLOADED : loaded.value();
         }
 
         @Override
         protected void load() {
             if (this.held() != null) return;
-            WatchHub.this.type.snapshots().peek(this.id, this.keyId, () -> WatchHub.this.type.db().read(this.ref, this.key));
+            WatchHub.this.type.snapshots().peek(this.id, this.keyId, this.reader);
         }
 
         @Override
         protected void handOff() {
             HeldEntity<K> held = this.held();
             if (held == null) return;
-            WatchHub.this.type.snapshots().seed(this.id, this.keyId, null, () -> WatchHub.this.type.db().read(this.ref, this.key), held.get(this.key));
+            WatchHub.this.type.snapshots().seed(this.id, this.keyId, null, this.reader, held.get((ValueKeyImpl<K, T>) this.key));
         }
     }
 
@@ -378,10 +398,9 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         @Override
         protected Object observe() {
             HeldEntity<K> held = this.held();
-            if (held != null) return this.encode(held.get(this.key, this.entry));
+            if (held != null) return held.get(this.key, this.entry);
             SingleFlightLoader.Loaded<V> loaded = WatchHub.this.type.snapshots().loaded(this.id, this.keyId, this.entry);
-            if (loaded == null) return UNLOADED;
-            return this.encode(loaded.value());
+            return loaded == null ? UNLOADED : loaded.value();
         }
 
         @Override
@@ -395,12 +414,6 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
             HeldEntity<K> held = this.held();
             if (held == null) return;
             WatchHub.this.type.snapshots().seed(this.id, this.keyId, this.entry, () -> WatchHub.this.type.db().readEntry(this.ref, this.key, this.entry), held.get(this.key, this.entry));
-        }
-
-        // 条目不存在时是 null
-        @Nullable
-        private StoredValue encode(@Nullable V value) {
-            return value == null ? null : this.key.valueForm().store(value);
         }
     }
 }

@@ -47,6 +47,11 @@ public final class DataMessenger {
         this.broker.publishAll(new InvalidateMessage(this, entityType, entityId, keyId, entry));
     }
 
+    // 视图键失效时用, 本服自己已经发起重读, 只通知别的服
+    public void invalidateOthers(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId) {
+        this.broker.publishOthers(new InvalidateMessage(this, entityType, entityId, keyId, null));
+    }
+
     public void override(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
         this.broker.publishAll(new OverrideMessage(this, entityType, entityId, keyId, entry, value));
     }
