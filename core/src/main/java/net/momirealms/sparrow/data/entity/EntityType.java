@@ -4,6 +4,7 @@ import net.momirealms.sparrow.data.Key;
 import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
+import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.SortableKey;
 import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
@@ -13,10 +14,12 @@ import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -64,6 +67,18 @@ public interface EntityType<K> {
     // 读出的值由所有读取方共享, 只能当作不可变对象使用, 并且要有按内容比较的 equals, watch 靠它判断值有没有变
     @NotNull
     <T> ViewKeyBuilder<K, T> view(@NotNull Key id, @NotNull Function<K, CompletableFuture<T>> loader);
+
+    // 名单键要求 builder 里传了 redis, 没传时抛 IllegalStateException. 值由所有读取方共享, 只能当作不可变对象使用
+    @NotNull
+    <V> RosterKeyBuilder<K, V> roster(@NotNull Key id, @NotNull ValueCodec<V> codec);
+
+    // 这一刻名单里的全部成员, 读的是本服镜像. 返回的 Map 是一份不可修改的副本
+    @NotNull
+    <V> Map<K, V> members(@NotNull RosterKey<K, V> key);
+
+    // 名单里任何成员进出或者值变了时调用 onChange. 回调的线程和要求与实体上的 watch 相同, ready 总是已经完成
+    @NotNull
+    Watch watch(@NotNull RosterKey<K, ?> key, @NotNull Runnable onChange);
 
     @NotNull
     CompletableFuture<Void> unregister(@NotNull DataKey<K> key);

@@ -2,6 +2,8 @@ package net.momirealms.sparrow.data.internal.sync;
 
 import net.momirealms.sparrow.data.storage.StoredValue;
 import net.momirealms.sparrow.message.MessageBroker;
+import net.momirealms.sparrow.message.PreparedMessage;
+import net.momirealms.sparrow.message.Target;
 import net.momirealms.sparrow.message.codec.MessageCodec;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -18,6 +20,7 @@ public final class DataMessenger {
 
     private final MessageBroker broker;
     private final Map<String, Listener> listeners = new ConcurrentHashMap<>();
+    private volatile @Nullable RosterListener rosters;
 
     private DataMessenger(@NotNull MessageBroker broker) {
         this.broker = broker;
@@ -30,7 +33,35 @@ public final class DataMessenger {
         broker.registry().register(InvalidateMessage.ID, MessageCodec.of(InvalidateMessage::write, buf -> new InvalidateMessage(messenger, buf)));
         broker.registry().register(OverrideMessage.ID, MessageCodec.of(OverrideMessage::write, buf -> new OverrideMessage(messenger, buf)));
         broker.registry().register(PublishMessage.ID, MessageCodec.of(PublishMessage::write, buf -> new PublishMessage(messenger, buf)));
+        broker.registry().register(RosterMessage.ID, MessageCodec.of(RosterMessage::write, buf -> new RosterMessage(messenger, buf)));
+        broker.registry().register(RosterProbeMessage.ID, MessageCodec.of(RosterProbeMessage::write, buf -> new RosterProbeMessage(messenger, buf)));
         return messenger;
+    }
+
+    @NotNull
+    public String appId() {
+        return this.broker.appId();
+    }
+
+    @NotNull
+    public String serverId() {
+        return this.broker.serverId();
+    }
+
+    public void listenRosters(@NotNull RosterListener listener) {
+        this.rosters = listener;
+    }
+
+    // 编码成频道和字节, 由调用方在 Redis 脚本里和哈希的写入一起发布. 发给所有服务器, 包括本服
+    @NotNull
+    public PreparedMessage prepare(@NotNull RosterChange change) {
+        return this.broker.prepare(new RosterMessage(this, change), Target.all());
+    }
+
+    // 只发给本服的探测, 同样由调用方自己发布到 Redis
+    @NotNull
+    public PreparedMessage prepareProbe(long nonce) {
+        return this.broker.prepare(new RosterProbeMessage(this, nonce), Target.server(this.broker.serverId()));
     }
 
     public void listen(@NotNull String entityType, @NotNull Listener listener) {
@@ -40,6 +71,7 @@ public final class DataMessenger {
     // DataService.close 的最后调用, 之后收到的消息都忽略. 消息类型还留在宿主的 broker 上, 编号不变
     public void unlistenAll() {
         this.listeners.clear();
+        this.rosters = null;
     }
 
     // 广播给所有服务器, 包括本服自己. 范围的含义见 InvalidateMessage 的构造器
@@ -89,6 +121,28 @@ public final class DataMessenger {
         } else {
             listener.publishEntries(message.entityId(), message.keyId(), entries);
         }
+    }
+
+    void receive(@NotNull RosterChange change) {
+        RosterListener listener = this.rosters;
+        if (listener != null) {
+            listener.change(change);
+        }
+    }
+
+    void receiveProbe(long nonce) {
+        RosterListener listener = this.rosters;
+        if (listener != null) {
+            listener.probe(nonce);
+        }
+    }
+
+    // 名单消息的接收方, 在 Redis 的订阅线程上按到达顺序调用, 不能阻塞
+    public interface RosterListener {
+
+        void change(@NotNull RosterChange change);
+
+        void probe(long nonce);
     }
 
     // 一个实体类型的消息接收方, 在 Redis 的订阅线程上直接处理. 解码和写进内存都只要微秒, 读库这类要等的事交给宿主的 Executor

@@ -5,6 +5,7 @@ plugins {
 dependencies {
     compileOnly(libs.sparrow.message)
     compileOnly(libs.netty.buffer)
+    compileOnly(libs.lettuce.core)
     compileOnly(libs.caffeine)
     compileOnly(libs.slf4j)
 }

@@ -8,6 +8,7 @@ import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.internal.snapshot.SingleFlightLoader;
 import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
+import net.momirealms.sparrow.data.internal.util.Values;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.storage.EntityRef;
@@ -18,7 +19,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -189,13 +189,6 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
         }
     }
 
-    // 顶层的 byte[] 没有按内容比较的 equals, 单独处理
-    private static boolean same(@Nullable Object seen, @Nullable Object current) {
-        if (seen == current) return true;
-        if (seen instanceof byte[] before && current instanceof byte[] after) return Arrays.equals(before, after);
-        return seen != null && seen.equals(current);
-    }
-
     // 观察的对象. entry 为空是普通键的值
     private record Target(@NotNull String keyId, @Nullable String entry) {
     }
@@ -244,7 +237,7 @@ public final class WatchHub<K> implements SnapshotCache.Observer<K> {
                 // 快照还没加载时不通知, 持有方刚下线时能看到的值不会先变成空
                 if (current == UNLOADED) return;
                 first = this.seen == UNLOADED;
-                boolean changed = first || (this.watchers > 0 && !same(this.seen, current));
+                boolean changed = first || (this.watchers > 0 && !Values.same(this.seen, current));
                 this.seen = current;
                 if (!changed) return;
                 listeners = List.copyOf(this.bindings);

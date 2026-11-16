@@ -8,6 +8,7 @@ import net.momirealms.sparrow.data.internal.key.DbKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapCounterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.DbMapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
+import net.momirealms.sparrow.data.internal.key.RosterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
@@ -20,6 +21,7 @@ import net.momirealms.sparrow.data.key.MapKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
 import net.momirealms.sparrow.data.key.MemoryMapKey;
+import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
 import net.momirealms.sparrow.data.storage.EntityRef;
@@ -186,6 +188,30 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         CompletableFuture<Void> reloaded = this.type.snapshots().reload(this.id, keyId);
         this.type.service().messenger().invalidateOthers(this.type.name(), ref.entityId(), keyId);
         return reloaded;
+    }
+
+    @NotNull
+    @Override
+    public <V> CompletableFuture<Void> announce(@NotNull RosterKey<K, V> key, @NotNull V value) {
+        return ((RosterKeyImpl<K, V>) key).roster().announce(this.id, value);
+    }
+
+    @NotNull
+    @Override
+    public CompletableFuture<Void> withdraw(@NotNull RosterKey<K, ?> key) {
+        return ((RosterKeyImpl<K, ?>) key).roster().withdraw(this.id);
+    }
+
+    @Nullable
+    @Override
+    public <V> V member(@NotNull RosterKey<K, V> key) {
+        return ((RosterKeyImpl<K, V>) key).roster().member(this.id);
+    }
+
+    @NotNull
+    @Override
+    public Watch watch(@NotNull RosterKey<K, ?> key, @NotNull Runnable onChange) {
+        return ((RosterKeyImpl<K, ?>) key).roster().watch(this.id, onChange);
     }
 
     // 内存键在本服持有时直接读容器, 其他情况读快照

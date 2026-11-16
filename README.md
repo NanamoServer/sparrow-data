@@ -29,6 +29,7 @@ Requires Java 21. The following are `compileOnly` and must be provided by the ho
 | `io.netty:netty-buffer` | 4.2.7.Final |
 | `com.github.ben-manes.caffeine:caffeine` | 3.2.3 |
 | `org.slf4j:slf4j-api` | 2.0.17 |
+| `io.lettuce:lettuce-core` | 7.7.0.RELEASE |
 
 ## Setup
 
@@ -41,6 +42,8 @@ DataService data = SparrowDataService.builder()
         .messageBroker(broker)
         .saveInterval(Duration.ofMinutes(5))   // auto save of held entities
         .snapshotExpiry(Duration.ofMinutes(5)) // optional, default 5 minutes
+        .redis(redisClient)                    // optional, only needed for roster keys
+        .serverAlive(serverId -> servers.isOnline(serverId)) // optional, filters roster records left by crashed servers
         .build();
 broker.subscribe();
 
@@ -172,6 +175,32 @@ homeStore.create(home).thenCompose(created -> player.entity(owner).invalidate(ho
 - The loader returns a `CompletableFuture` and is responsible for leaving the calling thread. Its result must not be `null`; return an empty collection or `Optional.empty()` when there is no data. It is called on a cold load, on every invalidation and on every `read`.
 - `invalidate` reloads this server's snapshot and tells the other servers to reload theirs. The future completes once this server's reload has landed in the snapshot, or immediately if this server has no snapshot. If the reload fails it fails with the loader's exception and the snapshot keeps the old value.
 - `peek`, `read`, `watch` and `pin` work on view keys like on any other value key. Loaded values are shared by all readers and must be treated as immutable.
+
+## Roster keys
+
+A roster key answers "who is in a given state across the network right now": a vanish list, an AFK list, staff on duty. Records live in Redis, are fine to lose, and are never saved to the database. Every server keeps a full mirror in memory, so lookups are synchronous.
+
+```java
+// register after broker.subscribe(); the future completes once the mirror is loaded
+RosterKey<UUID, String> vanished = player.roster(Key.sparrow("vanished"), ValueCodecs.STRING).register().join();
+
+entity.announce(vanished, playerName);            // adds to the roster, the record belongs to this server
+entity.withdraw(vanished);                        // removes it
+
+String name = player.entity(uuid).member(vanished);   // synchronous, null when not in the roster
+Map<UUID, String> all = player.members(vanished);
+
+Watch whole = player.watch(vanished, menu::refresh);                 // any member changed
+Watch single = player.entity(uuid).watch(vanished, menu::refresh);   // this entity changed
+```
+
+- Pass `redis(RedisClient)` to the builder, and it must be the same client the broker's connection comes from. The data layer opens its own command connection on it and closes only that connection on `close()`.
+- An `announce` is visible on this server before the call returns; other servers follow through messages. When another server announces the same entity, the record takes the new value and belongs to that server.
+- `withdraw` only removes a record this server owns. After a player switches servers, a late withdraw from the old server does not remove the new server's record. `offline` does not withdraw for you.
+- Registering a roster key clears the records this server left behind in a previous run. Unregistering the key and `data.close()` clear every record this server owns.
+- A crashed server cannot clean up. With `serverAlive` set, records whose owning server is not alive are filtered out on read.
+- After a Redis connection comes back, the data layer reconciles on its own: it restores this server's records that are missing in Redis, then reloads the mirror. This repairs both messages missed while the subscription was down and a wiped Redis.
+- `watch` callbacks carry no value and follow the same threading rules as other watches; `ready()` is always complete.
 
 ## Values
 

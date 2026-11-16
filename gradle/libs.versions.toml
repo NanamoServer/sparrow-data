@@ -14,3 +14,4 @@ sparrow-message = { module = "net.momirealms:sparrow-message", version = "26.11.
 
 # Storage
 netty-buffer = { module = "io.netty:netty-buffer", version = "4.2.7.Final" }
+lettuce-core = { module = "io.lettuce:lettuce-core", version = "7.7.0.RELEASE" }

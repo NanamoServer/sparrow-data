@@ -18,6 +18,11 @@ public final class ViewKeyImpl<K, T> extends AbstractDataKey<K> implements ViewK
         this.loader = loader;
     }
 
+    @Override
+    public boolean stored() {
+        return false;
+    }
+
     // loader 来自宿主. 快照要求读取函数只通过 future 报告失败, 它直接抛出的异常在这里转成失败的 future
     @NotNull
     public CompletableFuture<T> load(@NotNull K id) {

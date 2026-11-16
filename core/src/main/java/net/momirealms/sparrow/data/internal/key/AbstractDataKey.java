@@ -36,4 +36,9 @@ public abstract class AbstractDataKey<K> implements DataKey<K> {
     public StorageKey storageKey() {
         return this.storageKey;
     }
+
+    // 这个键的数据是不是放在 EntityStorage 里. 视图键和名单键不是, 注册它们不需要存储做准备
+    public boolean stored() {
+        return true;
+    }
 }

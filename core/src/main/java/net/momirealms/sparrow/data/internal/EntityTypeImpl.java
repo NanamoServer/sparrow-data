@@ -5,10 +5,12 @@ import net.momirealms.sparrow.data.RankEntry;
 import net.momirealms.sparrow.data.entity.Entity;
 import net.momirealms.sparrow.data.entity.EntityIdCodec;
 import net.momirealms.sparrow.data.entity.EntityType;
+import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.db.DbOperations;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.KeyRegistry;
 import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
+import net.momirealms.sparrow.data.internal.key.RosterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
@@ -19,6 +21,7 @@ import net.momirealms.sparrow.data.internal.key.builder.DbMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryMapKeyBuilderImpl;
+import net.momirealms.sparrow.data.internal.key.builder.RosterKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.ViewKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.memory.Backfill;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
@@ -30,6 +33,7 @@ import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.EntryKeyCodec;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
+import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.SortableKey;
 import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.ValueKey;
@@ -40,6 +44,7 @@ import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
+import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import net.momirealms.sparrow.data.storage.EntityRef;
 import net.momirealms.sparrow.data.storage.EntityStorage;
@@ -169,13 +174,35 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         return new ViewKeyBuilderImpl<>(this, id, loader);
     }
 
-    // DB 键和视图键只需要移出键表. 内存键移出键表后, 每个持有中的实体把这个键排进落库链, 落库时摘掉槽, future 在全部落库后结束.
+    @NotNull
+    @Override
+    public <V> RosterKeyBuilder<K, V> roster(@NotNull Key id, @NotNull ValueCodec<V> codec) {
+        return new RosterKeyBuilderImpl<>(this, id, codec);
+    }
+
+    @NotNull
+    @Override
+    public <V> Map<K, V> members(@NotNull RosterKey<K, V> key) {
+        return ((RosterKeyImpl<K, V>) key).roster().members();
+    }
+
+    @NotNull
+    @Override
+    public Watch watch(@NotNull RosterKey<K, ?> key, @NotNull Runnable onChange) {
+        return ((RosterKeyImpl<K, ?>) key).roster().watch(onChange);
+    }
+
+    // 名单键移出键表后清掉本服名下的记录, future 在 Redis 完成清理后结束. DB 键和视图键只需要移出键表. 内存键移出键表后, 每个持有中的实体把这个键排进落库链, 落库时摘掉槽, future 在全部落库后结束.
     // 两种键都丢掉本服这个键的快照, 库里的数据保留, 要删数据用 purge. 注销之后调用方不再使用旧的键对象
     @NotNull
     @Override
     public CompletableFuture<Void> unregister(@NotNull DataKey<K> key) {
         AbstractDataKey<K> impl = (AbstractDataKey<K>) key;
         String keyId = impl.storageKey().id();
+        if (impl instanceof RosterKeyImpl<K, ?> roster) {
+            this.keys.unregister(impl);
+            return this.service.rosters().close(roster);
+        }
         if (!(key instanceof MemoryDataKey<?>)) {
             this.keys.unregister(impl);
             this.snapshots.discard(keyId);

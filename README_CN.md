@@ -29,6 +29,7 @@ dependencies {
 | `io.netty:netty-buffer` | 4.2.7.Final |
 | `com.github.ben-manes.caffeine:caffeine` | 3.2.3 |
 | `org.slf4j:slf4j-api` | 2.0.17 |
+| `io.lettuce:lettuce-core` | 7.7.0.RELEASE |
 
 ## 初始化
 
@@ -41,6 +42,8 @@ DataService data = SparrowDataService.builder()
         .messageBroker(broker)
         .saveInterval(Duration.ofMinutes(5))   // 持有中实体的定时落库间隔
         .snapshotExpiry(Duration.ofMinutes(5)) // 可选, 默认 5 分钟
+        .redis(redisClient)                    // 可选, 用名单键时才需要
+        .serverAlive(serverId -> servers.isOnline(serverId)) // 可选, 过滤崩溃服务器留下的名单记录
         .build();
 broker.subscribe();
 
@@ -172,6 +175,32 @@ homeStore.create(home).thenCompose(created -> player.entity(owner).invalidate(ho
 - loader 返回 `CompletableFuture`，自己负责离开调用线程；结果不能是 `null`，没有数据时返回空集合或 `Optional.empty()`。冷加载、收到失效和每次 `read` 都会调用它。
 - `invalidate` 让本服重读快照，并通知其他服务器重读。future 在本服这次重读写进快照后完成，本服没有这个快照时立即完成；重读失败时带着 loader 的异常失败，快照保留旧值。
 - `peek`、`read`、`watch`、`pin` 对视图键的用法和其他普通键一样。读出的值由所有读取方共享，只能当作不可变对象使用。
+
+## 名单键
+
+名单键回答“全网现在谁处于某个状态”，例如隐身名单、挂机名单、值班管理员。记录存在 Redis 里，丢了也无妨，不落库。每台服务器在内存里有一份完整镜像，查询是同步的。
+
+```java
+// 要在 broker.subscribe() 之后注册, future 在镜像装好后完成
+RosterKey<UUID, String> vanished = player.roster(Key.sparrow("vanished"), ValueCodecs.STRING).register().join();
+
+entity.announce(vanished, playerName);            // 写进名单, 记录归本服所有
+entity.withdraw(vanished);                        // 移出名单
+
+String name = player.entity(uuid).member(vanished);   // 同步, 不在名单里时为 null
+Map<UUID, String> all = player.members(vanished);
+
+Watch whole = player.watch(vanished, menu::refresh);                 // 任何成员变了
+Watch single = player.entity(uuid).watch(vanished, menu::refresh);   // 这一个实体变了
+```
+
+- 需要在 builder 里传 `redis(RedisClient)`，并且它必须和 broker 的连接来自同一个 client。数据层在上面自己开一条命令连接，`close()` 时只关这条连接。
+- `announce` 返回之前本服就能查到，其他服务器靠消息跟上。同一个实体被另一台服务器 `announce` 时，记录换成新值并归那台服务器所有。
+- `withdraw` 只撤回归本服所有的记录。玩家换服后，旧服务器迟到的撤回不会删掉新服务器的记录。`offline` 不会自动撤回，要自己调用。
+- 注册名单键时会清掉本服上次运行留下的记录，注销键和 `data.close()` 时清掉本服名下的全部记录。
+- 崩溃的服务器来不及清理。传了 `serverAlive` 时，所属服务器不存活的记录在读取时被过滤掉。
+- Redis 连接恢复后数据层会自动对账：把 Redis 里缺了的本服记录补回去，再重新装载镜像。订阅断开期间漏掉的消息和被清空的 Redis 都靠它修复。
+- `watch` 的回调不带值，线程和要求与其他 watch 相同，`ready()` 总是已经完成。
 
 ## 值的编解码
 

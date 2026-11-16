@@ -8,6 +8,7 @@ import net.momirealms.sparrow.data.key.MapKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
 import net.momirealms.sparrow.data.key.MemoryMapKey;
+import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
 import org.jetbrains.annotations.NotNull;
@@ -84,6 +85,23 @@ public interface Entity<K> {
     // future 在本服这次重读写进快照后完成, 重读失败时带着 loader 的异常失败, 快照保留旧值; 本服没有这个快照时立即完成
     @NotNull
     CompletableFuture<Void> invalidate(@NotNull ViewKey<K, ?> key);
+
+    // 把这个实体写进名单, 记录归本服所有, 已经在名单里时换成新值并接管归属. 本服的查询在返回之前就能看到,
+    // future 在 Redis 完成写入和广播后完成, 不等其他服务器处理
+    @NotNull
+    <V> CompletableFuture<Void> announce(@NotNull RosterKey<K, V> key, @NotNull V value);
+
+    // 把这个实体移出名单. 只撤回归本服所有的记录, 已经被别的服务器接管时什么都不做
+    @NotNull
+    CompletableFuture<Void> withdraw(@NotNull RosterKey<K, ?> key);
+
+    // 同步读本服镜像, 不在名单里时返回 null. 所属服务器被判定为不存活的记录也当作不在
+    @Nullable
+    <V> V member(@NotNull RosterKey<K, V> key);
+
+    // 这个实体进出名单或者值变了时调用 onChange, ready 总是已经完成
+    @NotNull
+    Watch watch(@NotNull RosterKey<K, ?> key, @NotNull Runnable onChange);
 
     @Nullable
     <T> T peek(@NotNull ValueKey<K, T> key);
