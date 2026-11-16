@@ -36,7 +36,7 @@ public final class OverrideService<K> {
     }
 
     // 发起端. 在 Executor 上写库, 写完广播覆盖消息, future 在写库完成后结束.
-    // value 为 null 是重置, 删掉存储的值
+    // value 为 null 是删掉存储的值, 持有者读到默认值
     @NotNull
     public <T> CompletableFuture<Void> override(@NotNull EntityRef ref, @NotNull StorageKey key, @NotNull ValueForm<T> form, @Nullable T value) {
         EntityStorage storage = this.service.storage();

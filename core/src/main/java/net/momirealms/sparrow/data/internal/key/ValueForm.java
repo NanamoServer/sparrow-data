@@ -6,26 +6,30 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Optional;
-
 @ApiStatus.Internal
 public sealed interface ValueForm<T> {
 
-    // 键的值和存储里的值之间的转换. 返回 null 表示没有要存的值, 写入时要删除存储里的值
+    // 键的值和存储里的值之间的转换. value 为 null 时返回 null, 表示存储里不该有值, 写入时要删除
     @Nullable
-    StoredValue store(@NotNull T value);
+    StoredValue store(@Nullable T value);
 
-    // stored 为 null 表示存储里没有值
+    // stored 为 null 表示存储里没有值, 这时读到默认值, 没有默认值的键读到 null
     @Nullable
     T load(@Nullable StoredValue stored);
 
-    // 用 ValueCodec 编成字节. 存储里没有值时读到 fallback
-    record CodecForm<T>(@NotNull ValueCodec<T> codec, @NotNull T fallback) implements ValueForm<T> {
+    // 调用方写入 null 之后, 读取方看到的值
+    @Nullable
+    default T orFallback(@Nullable T value) {
+        return value == null ? this.load(null) : value;
+    }
 
-        @NotNull
+    // 用 ValueCodec 编成字节. fallback 是注册时给的默认值, 没给时为 null
+    record CodecForm<T>(@NotNull ValueCodec<T> codec, @Nullable T fallback) implements ValueForm<T> {
+
+        @Nullable
         @Override
-        public StoredValue store(@NotNull T value) {
-            return new StoredValue.OfBytes(this.codec.encode(value));
+        public StoredValue store(@Nullable T value) {
+            return value == null ? null : new StoredValue.OfBytes(this.codec.encode(value));
         }
 
         @Nullable
@@ -36,32 +40,14 @@ public sealed interface ValueForm<T> {
         }
     }
 
-    // 不设默认值的键. 存储里只放 Optional 里面的值, Optional.empty() 对应存储里没有值
-    record OptionalCodecForm<T>(@NotNull ValueCodec<T> codec) implements ValueForm<Optional<T>> {
-
-        @Nullable
-        @Override
-        public StoredValue store(@NotNull Optional<T> value) {
-            if (value.isEmpty()) return null;
-            return new StoredValue.OfBytes(this.codec.encode(value.get()));
-        }
-
-        @NotNull
-        @Override
-        public Optional<T> load(@Nullable StoredValue stored) {
-            if (stored == null) return Optional.empty();
-            return Optional.of(this.codec.decode(((StoredValue.OfBytes) stored).value()));
-        }
-    }
-
     // memoryLong 键和计数键, 值直接以 long 存储
     record LongForm(long fallback) implements ValueForm<Long> {
         public static final LongForm ZERO = new LongForm(0L);
 
-        @NotNull
+        @Nullable
         @Override
-        public StoredValue store(@NotNull Long value) {
-            return new StoredValue.OfLong(value);
+        public StoredValue store(@Nullable Long value) {
+            return value == null ? null : new StoredValue.OfLong(value);
         }
 
         @NotNull

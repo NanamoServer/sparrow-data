@@ -9,6 +9,7 @@ import net.momirealms.sparrow.data.internal.key.RosterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.memory.HeldEntity;
+import net.momirealms.sparrow.data.internal.snapshot.SingleFlightLoader;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
@@ -40,20 +41,20 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.type.held(this.id) != null;
     }
 
-    @NotNull
+    @Nullable
     @Override
     public <T> T get(@NotNull MemoryKey<K, T> key) {
         return this.requireHeld().get((ValueKeyImpl<K, T>) key);
     }
 
     @Override
-    public <T> void write(@NotNull MemoryKey<K, T> key, @NotNull T value) {
+    public <T> void write(@NotNull MemoryKey<K, T> key, @Nullable T value) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         this.requireHeld().write(impl, value);
         this.type.watches().touch(this.id, impl.storageKey().id());
     }
 
-    @NotNull
+    @Nullable
     @Override
     public <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
@@ -75,20 +76,12 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.requireHeld().save();
     }
 
-    // 任何服, 不管这个实体被谁持有都能调用. future 在写库完成后结束, 广播在后台继续
+    // 任何服, 不管这个实体被谁持有都能调用. future 在写库完成后结束, 广播在后台继续. value 为 null 是删掉存储的值, 持有者把它读成默认值
     @NotNull
     @Override
-    public <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @NotNull T value) {
+    public <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @Nullable T value) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         return this.type.overrides().override(this.ref(), impl.storageKey(), impl.form(), value);
-    }
-
-    // 重置是删掉存储的值, 持有者把它读成默认值或 Optional.empty()
-    @NotNull
-    @Override
-    public CompletableFuture<Void> reset(@NotNull MemoryKey<K, ?> key) {
-        ValueKeyImpl<K, ?> impl = (ValueKeyImpl<K, ?>) key;
-        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.form(), null);
     }
 
     @NotNull
@@ -141,10 +134,25 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     // 内存键在本服持有时直接读容器, 其他情况读快照
     @Nullable
     @Override
-    public <T> T peek(@NotNull ValueKey<K, T> key) {
+    public <T> T readCachedOrNull(@NotNull ValueKey<K, T> key) {
+        return this.readCachedOrNull(key, true);
+    }
+
+    // load 为 false 时走只查询的入口, 不算访问, 不会推迟快照的过期
+    @Nullable
+    @Override
+    public <T> T readCachedOrNull(@NotNull ValueKey<K, T> key, boolean load) {
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return held.get((ValueKeyImpl<K, T>) key);
-        return this.type.snapshots().peek(this.id, ((AbstractDataKey<K>) key).storageKey().id(), this.type.reader(this.id, key));
+        String keyId = ((AbstractDataKey<K>) key).storageKey().id();
+        if (load) return this.type.snapshots().peek(this.id, keyId, this.type.reader(this.id, key));
+        SingleFlightLoader.Loaded<T> loaded = this.type.snapshots().loaded(this.id, keyId);
+        return loaded == null ? null : loaded.value();
+    }
+
+    @Override
+    public boolean isCached(@NotNull ValueKey<K, ?> key) {
+        return this.heldFor(key) != null || this.type.snapshots().loaded(this.id, ((AbstractDataKey<K>) key).storageKey().id()) != null;
     }
 
     @NotNull
@@ -157,7 +165,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @NotNull
     @Override
-    public <T> CompletableFuture<Void> set(@NotNull DbKey<K, T> key, @NotNull T value) {
+    public <T> CompletableFuture<Void> set(@NotNull DbKey<K, T> key, @Nullable T value) {
         return this.type.db().setValue(this.id, (DbKeyImpl<K, T>) key, value);
     }
 

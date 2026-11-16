@@ -64,7 +64,7 @@ public final class SparrowDataService {
             return this;
         }
 
-        // 快照在最近一次 peek 之后多久没人看就丢掉, 不设时为 5 分钟
+        // 快照在最近一次 readCachedOrNull 之后多久没人看就丢掉, 不设时为 5 分钟
         @NotNull
         public Builder snapshotExpiry(@NotNull Duration snapshotExpiry) {
             this.snapshotExpiry = snapshotExpiry;

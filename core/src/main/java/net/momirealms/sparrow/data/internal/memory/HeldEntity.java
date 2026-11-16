@@ -49,7 +49,7 @@ public final class HeldEntity<K> {
         this.values = new ConcurrentHashMap<>(slots.values());
     }
 
-    // 把读出来的存储值解码成槽, 在锁外调用. 没有存储值的键, 有默认值的用默认值, 可选键用 Optional.empty()
+    // 把读出来的存储值解码成槽, 在锁外调用. 没有存储值的键用默认值, 没有默认值的是 null
     @NotNull
     public static <K> Slots<K> decode(@NotNull List<AbstractDataKey<K>> keys, @NotNull StoredEntity stored) {
         int size = keys.size();
@@ -76,24 +76,23 @@ public final class HeldEntity<K> {
         this.values.keySet().retainAll(keys);
     }
 
-    @NotNull
+    @Nullable
     public <T> T get(@NotNull ValueKeyImpl<K, T> key) {
         return this.value(key).value();
     }
 
-    public synchronized <T> void write(@NotNull ValueKeyImpl<K, T> key, @NotNull T value) {
+    public synchronized <T> void write(@NotNull ValueKeyImpl<K, T> key, @Nullable T value) {
         this.requireHeld();
         this.value(key).set(value);
     }
 
-    // operator 在锁里执行, 同一个实体上的其他修改和落库取脏都要等它
-    @NotNull
+    // operator 在锁里执行, 同一个实体上的其他修改和落库取脏都要等它. operator 返回 null 是删除存储的值, 这时返回的是默认值
+    @Nullable
     public synchronized <T> T update(@NotNull ValueKeyImpl<K, T> key, @NotNull UnaryOperator<T> operator) {
         this.requireHeld();
         HeldValue<T> slot = this.value(key);
-        T value = operator.apply(slot.value());
-        slot.set(value);
-        return value;
+        slot.set(operator.apply(slot.value()));
+        return slot.value();
     }
 
     // 收到覆盖时调用. 新值写进容器并标脏, 下一次落库会再写一遍, 盖掉在途落库可能写回库里的旧值.

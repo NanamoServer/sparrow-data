@@ -13,10 +13,10 @@ import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
@@ -35,7 +35,7 @@ public interface EntityType<K> {
     <T> MemoryKeyBuilder<K, T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue);
 
     @NotNull
-    <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull ValueCodec<T> codec);
+    <T> MemoryKeyBuilder<K, @Nullable T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec);
 
     @NotNull
     MemoryLongKeyBuilder<K> memoryLong(@NotNull Key id);
@@ -44,7 +44,7 @@ public interface EntityType<K> {
     <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue);
 
     @NotNull
-    <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull ValueCodec<T> codec);
+    <T> DbKeyBuilder<K, @Nullable T> db(@NotNull Key id, @NotNull ValueCodec<T> codec);
 
     @NotNull
     DbCounterKeyBuilder<K> dbCounter(@NotNull Key id);

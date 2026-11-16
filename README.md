@@ -19,7 +19,7 @@ repositories {
 }
 
 dependencies {
-    implementation("net.momirealms:sparrow-data:0.3")
+    implementation("net.momirealms:sparrow-data:0.0.4")
 }
 ```
 
@@ -76,7 +76,7 @@ The value sits in the memory of the server in charge of the entity. Reads and wr
 ```java
 // Register. Returns a future: when registered at runtime, entities already online have to load the new key first
 MemoryKey<UUID, Integer> MANA = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();          // default 100
-MemoryKey<UUID, Optional<String>> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // no default, so the type is Optional
+MemoryKey<UUID, @Nullable String> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // no default, reads null until it is set
 SortableMemoryKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();                 // a long that can be ranked
 
 // Online: read every memory key from the database and start the save interval
@@ -86,7 +86,7 @@ Entity<UUID> entity = player.entity(uuid);
 int mana = entity.get(MANA);
 entity.write(MANA, mana - 20);
 entity.update(LEVEL, level -> level + 1);        // read, change and write in one step
-entity.write(TITLE, Optional.empty());           // writing empty to an optional key deletes it
+entity.write(TITLE, null);                       // writing null deletes the stored value
 
 entity.save();                                   // save now instead of waiting for the interval
 entity.publish(MANA);                            // push the current value into other servers' snapshots, no save
@@ -98,13 +98,14 @@ player.residence().offline(uuid).join();
 - **Only one server may have an entity `online` at any moment.** On a server switch the new server must wait for the old server's `offline` to finish. That lock is the host's job.
 - `get` / `write` / `update` / `save` / `publish` only work on the server that called `online`. Elsewhere they throw `IllegalStateException`.
 - Do not modify an object you read. Return a new one from `update`.
+- Writing null deletes the stored value. This holds for `write`, the value returned from `update`, `override` and `set` on DB keys. Afterwards a key with a default reads the default and a key without one reads null.
 - A crash loses the changes made after the last save.
 
 Any server can change an entity that is on another server or offline:
 
 ```java
-player.entity(target).override(TITLE, Optional.of("Admin"));   // writes the database, then tells the server in charge to switch
-player.entity(target).reset(MANA);                              // back to the default
+player.entity(target).override(TITLE, "Admin");   // writes the database, then tells the server in charge to switch
+player.entity(target).override(MANA, null);       // deletes the stored value, reads give the default
 ```
 
 ## DB keys
@@ -165,7 +166,9 @@ The same for memory keys, DB keys and view keys.
 Entity<UUID> target = player.entity(targetId);
 
 target.read(COINS);              // CompletableFuture<T>, reads the latest value
-Long coins = target.peek(COINS); // synchronous read of this server's snapshot. Returns null until loaded and starts loading in the background
+Long coins = target.readCachedOrNull(COINS);        // synchronous read of this server's snapshot. Returns null until cached and starts loading in the background
+target.readCachedOrNull(COINS, false);              // reads an existing snapshot only, never starts a load
+target.isCached(COINS);                             // whether a read would find it. A key without a default can cache null, this tells the two apart
 ```
 
 A snapshot refreshes when the data changes and is dropped when nobody reads it for `snapshotExpiry`.
@@ -173,15 +176,15 @@ A snapshot refreshes when the data changes and is dropped when nobody reads it f
 ### watch and pin
 
 ```java
-// watch: calls back when the value changes. The callback carries no value, read it with peek
-Watch watch = target.watch(COINS, () -> menu.refresh(target.peek(COINS)));
-watch.ready().thenRun(() -> menu.open(target.peek(COINS)));   // ready completes once peek can read a value
+// watch: calls back when the value changes. The callback carries no value, read it with readCachedOrNull
+Watch watch = target.watch(COINS, () -> menu.refresh(target.readCachedOrNull(COINS)));
+watch.ready().thenRun(() -> menu.open(target.readCachedOrNull(COINS)));   // ready completes once the snapshot can be read
 watch.close();                                                // always close it
 
 // pin: only keeps the snapshot loaded, no callback. For synchronous reads while a player is online
 Pin pin = target.pin(COINS);
 pin.ready().join();
-long balance = target.peek(COINS);                            // never null until close
+long balance = target.readCachedOrNull(COINS);                // always readable until close
 pin.close();
 ```
 
@@ -198,11 +201,11 @@ The data lives in your own table. Sparrow Data only provides snapshots and cross
 ViewKey<UUID, List<Home>> HOMES = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
 
 Entity<UUID> entity = player.entity(owner);
-entity.peek(HOMES);                       // peek / read / watch / pin work as on any other key
+entity.readCachedOrNull(HOMES);           // readCachedOrNull / read / watch / pin work as on any other key
 entity.read(HOMES);                       // calls the loader every time
 
 // After changing your own table, say so: this server reloads its snapshot and so do the others
-homeStore.create(home).thenCompose(done -> entity.invalidate(HOMES));   // when the future completes, peek here returns the new data
+homeStore.create(home).thenCompose(done -> entity.invalidate(HOMES));   // when the future completes, reads here return the new data
 ```
 
 Loaded objects are shared by every reader, so do not modify them. An entity type that only has view keys gets no tables.

@@ -42,17 +42,17 @@ public final class DbOperations<K> {
     }
 
     @NotNull
-    public <T> CompletableFuture<Void> setValue(@NotNull K id, @NotNull DbKeyImpl<K, T> key, @NotNull T value) {
+    public <T> CompletableFuture<Void> setValue(@NotNull K id, @NotNull DbKeyImpl<K, T> key, @Nullable T value) {
         EntityRef ref = this.type.ref(id);
         return this.run(() -> {
             if (setValue(this.storage, ref, key, value)) {
-                this.written(id, ref, key.storageKey(), value);
+                this.written(id, ref, key.storageKey(), key.form().orFallback(value));
             }
         });
     }
 
-    // 可选键写入 Optional.empty() 就是删除. 返回存储里的数据有没有变
-    static <T> boolean setValue(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull DbKeyImpl<?, T> key, @NotNull T value) {
+    // 写入 null 就是删除存储的值. 返回存储里的数据有没有变
+    static <T> boolean setValue(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull DbKeyImpl<?, T> key, @Nullable T value) {
         StoredValue stored = key.form().store(value);
         if (stored == null) return storage.remove(ref, key.storageKey());
         storage.set(ref, key.storageKey(), stored);
@@ -69,7 +69,8 @@ public final class DbOperations<K> {
         });
     }
 
-    // CAS 循环, 条件是读到的原始字节. 写入失败说明读完之后有人改过, 重读后再执行一次 operator, 所以 operator 可能执行多次
+    // CAS 循环, 条件是读到的原始字节. 写入失败说明读完之后有人改过, 重读后再执行一次 operator, 所以 operator 可能执行多次.
+    // operator 返回 null 是删除存储的值, 这时结果里的值是默认值
     @NotNull
     static <T> Update<T> updateValue(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull DbKeyImpl<?, T> key, @NotNull UnaryOperator<T> operator) {
         ValueForm<T> form = key.form();
@@ -79,19 +80,19 @@ public final class DbOperations<K> {
             byte[] expected = current == null ? null : ((StoredValue.OfBytes) current).value();
             T value = operator.apply(form.load(current));
             StoredValue stored = form.store(value);
-            if (unchanged(expected, stored)) return new Update<>(value, false);
-            if (compareAndWrite(storage, ref, storageKey, expected, stored)) return new Update<>(value, true);
+            if (unchanged(expected, stored)) return new Update<>(form.orFallback(value), false);
+            if (compareAndWrite(storage, ref, storageKey, expected, stored)) return new Update<>(form.orFallback(value), true);
         }
     }
 
-    // 新字节和读到的一样时不用写, 相当于在读到的那一刻做了一次没有改动的更新. 可选键的 stored 为 null 时, 本来就没有值也算没有改动.
+    // 新字节和读到的一样时不用写, 相当于在读到的那一刻做了一次没有改动的更新. stored 为 null 时, 本来就没有值也算没有改动.
     // 存储因此不会收到 expected 和新值相同的 CAS
     private static boolean unchanged(byte @Nullable [] expected, @Nullable StoredValue stored) {
         if (stored == null) return expected == null;
         return Arrays.equals(expected, ((StoredValue.OfBytes) stored).value());
     }
 
-    // 可选键的 operator 返回 Optional.empty() 时 stored 为 null, 这时以读到的字节为条件删除
+    // operator 返回 null 时 stored 为 null, 这时以读到的字节为条件删除
     private static boolean compareAndWrite(@NotNull EntityStorage storage, @NotNull EntityRef ref, @NotNull StorageKey key, byte @Nullable [] expected, @Nullable StoredValue stored) {
         if (stored == null) return storage.compareAndRemove(ref, key, expected);
         return storage.compareAndSet(ref, key, expected, ((StoredValue.OfBytes) stored).value());

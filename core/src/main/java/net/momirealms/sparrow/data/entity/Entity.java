@@ -25,13 +25,14 @@ public interface Entity<K> {
 
     boolean isHeld();
 
-    // 读到的值由持有容器和快照共享, 不能原地修改, BYTES 读出的数组也一样. 要改就在 update 里返回新值
-    @NotNull
+    // 读到的值由持有容器和快照共享, 不能原地修改, BYTES 读出的数组也一样. 要改就在 update 里返回新值.
+    // 值能不能是 null 由键的类型决定: 注册时给了默认值的键永远读不到 null, 没给的键没有存储值时读到 null
     <T> T get(@NotNull MemoryKey<K, T> key);
 
-    <T> void write(@NotNull MemoryKey<K, T> key, @NotNull T value);
+    // 写入 null 是删除存储的值, 之后有默认值的键读到默认值, 没有的读到 null. override 和 DB 键的 set 同理
+    <T> void write(@NotNull MemoryKey<K, T> key, T value);
 
-    @NotNull
+    // operator 返回 null 同样是删除存储的值
     <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator);
 
     void publish(@NotNull MemoryDataKey<K> key);
@@ -40,10 +41,7 @@ public interface Entity<K> {
     CompletableFuture<Void> save();
 
     @NotNull
-    <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @NotNull T value);
-
-    @NotNull
-    CompletableFuture<Void> reset(@NotNull MemoryKey<K, ?> key);
+    <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, T value);
 
     @NotNull
     <T> Watch watch(@NotNull ValueKey<K, T> key, @NotNull Runnable onChange);
@@ -73,14 +71,23 @@ public interface Entity<K> {
     @NotNull
     Watch watch(@NotNull RosterKey<K, ?> key, @NotNull Runnable onChange);
 
+    // 同步读本服缓存的值, 内存键在本服持有时读的是持有的值. 还没缓存时返回 null 并在后台开始加载.
+    // 没有默认值的键缓存到的值本身也可能是 null, 要区分时用 isCached
     @Nullable
-    <T> T peek(@NotNull ValueKey<K, T> key);
+    <T> T readCachedOrNull(@NotNull ValueKey<K, T> key);
+
+    // load 为 false 时只读已有的缓存, 没有也不发起加载, 也不算一次访问, 不会推迟缓存的过期
+    @Nullable
+    <T> T readCachedOrNull(@NotNull ValueKey<K, T> key, boolean load);
+
+    // readCachedOrNull 现在能不能读到值. 只查询, 不触发加载
+    boolean isCached(@NotNull ValueKey<K, ?> key);
 
     @NotNull
     <T> CompletableFuture<T> read(@NotNull ValueKey<K, T> key);
 
     @NotNull
-    <T> CompletableFuture<Void> set(@NotNull DbKey<K, T> key, @NotNull T value);
+    <T> CompletableFuture<Void> set(@NotNull DbKey<K, T> key, T value);
 
     @NotNull
     <T> CompletableFuture<T> update(@NotNull DbKey<K, T> key, @NotNull UnaryOperator<T> operator);

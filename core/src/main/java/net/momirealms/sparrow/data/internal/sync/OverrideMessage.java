@@ -19,7 +19,7 @@ public final class OverrideMessage extends OneWayMessage {
     private final String keyId;
     private final @Nullable StoredValue value;
 
-    // 覆盖一个键. value 为空表示重置, 持有者删掉这个值
+    // 覆盖一个键. value 为空表示删掉存储的值, 持有者读到默认值
     OverrideMessage(@NotNull DataMessenger messenger, @NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
         this.messenger = messenger;
         this.entityType = entityType;

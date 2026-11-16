@@ -11,9 +11,8 @@ import java.util.function.UnaryOperator;
 /** 事务内的 DB 权威操作. 方法和 {@link Entity} 上的同名方法一一对应, 区别是同步执行, 第一个参数是实体. */
 public interface Transaction {
 
-    <K, T> void set(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @NotNull T value);
+    <K, T> void set(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, T value);
 
-    @NotNull
     <K, T> T update(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @NotNull UnaryOperator<T> operator);
 
     <K> void set(@NotNull Entity<K> entity, @NotNull DbCounterKey<K> key, long value);

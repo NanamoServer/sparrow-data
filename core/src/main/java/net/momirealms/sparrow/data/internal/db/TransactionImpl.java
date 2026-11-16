@@ -61,15 +61,15 @@ public final class TransactionImpl implements Transaction {
     }
 
     @Override
-    public <K, T> void set(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @NotNull T value) {
+    public <K, T> void set(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @Nullable T value) {
         EntityImpl<K> target = (EntityImpl<K>) entity;
         DbKeyImpl<K, T> impl = (DbKeyImpl<K, T>) key;
         if (DbOperations.setValue(this.attempt, target.ref(), impl, value)) {
-            this.changed(target, impl.storageKey(), value);
+            this.changed(target, impl.storageKey(), impl.form().orFallback(value));
         }
     }
 
-    @NotNull
+    @Nullable
     @Override
     public <K, T> T update(@NotNull Entity<K> entity, @NotNull DbKey<K, T> key, @NotNull UnaryOperator<T> operator) {
         EntityImpl<K> target = (EntityImpl<K>) entity;

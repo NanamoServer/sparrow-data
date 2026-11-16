@@ -19,7 +19,7 @@ repositories {
 }
 
 dependencies {
-    implementation("net.momirealms:sparrow-data:0.3")
+    implementation("net.momirealms:sparrow-data:0.0.4")
 }
 ```
 
@@ -76,7 +76,7 @@ Entity<UUID> entity = player.entity(uuid);   // 只是一个地址, 随时可以
 ```java
 // 注册. 返回 future, 运行中注册时要等已在线的实体补读完这个键
 MemoryKey<UUID, Integer> MANA = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();          // 默认值 100
-MemoryKey<UUID, Optional<String>> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // 不给默认值, 类型是 Optional
+MemoryKey<UUID, @Nullable String> TITLE = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();  // 不给默认值, 没设置过时读到 null
 SortableMemoryKey<UUID> LEVEL = player.memoryLong(Key.sparrow("level")).sortable().register().join();                 // long, 可排行
 
 // 上线: 从数据库读出全部内存键, 开始定时落库
@@ -86,7 +86,7 @@ Entity<UUID> entity = player.entity(uuid);
 int mana = entity.get(MANA);
 entity.write(MANA, mana - 20);
 entity.update(LEVEL, level -> level + 1);        // 读改写一步完成
-entity.write(TITLE, Optional.empty());           // 可选键写空就是删除
+entity.write(TITLE, null);                       // 写 null 就是删除存储的值
 
 entity.save();                                   // 立刻落库, 不等定时
 entity.publish(MANA);                            // 把当前值推给其他服的快照, 不落库
@@ -98,13 +98,14 @@ player.residence().offline(uuid).join();
 - **同一时刻只能有一台服对同一个实体 `online`。** 换服时新服要等旧服的 `offline` 完成，这把锁由宿主负责。
 - `get` / `write` / `update` / `save` / `publish` 只能在 `online` 的那台服上调用，否则抛 `IllegalStateException`。
 - 读出的对象不要原地修改，用 `update` 返回新对象。
+- 写入 null 就是删除存储的值，`write`、`update` 的返回值、`override` 和 DB 键的 `set` 都一样。之后有默认值的键读到默认值，没有默认值的键读到 null。
 - 崩溃时丢失上次落库之后的修改。
 
 任何一台服都可以改别的服上的、或者离线的实体：
 
 ```java
-player.entity(target).override(TITLE, Optional.of("管理员"));   // 写库, 再通知管着他的那台服换成新值
-player.entity(target).reset(MANA);                              // 恢复默认值
+player.entity(target).override(TITLE, "管理员");   // 写库, 再通知管着他的那台服换成新值
+player.entity(target).override(MANA, null);       // 删掉存储的值, 读到的是默认值
 ```
 
 ## DB 键
@@ -165,7 +166,9 @@ player.rankOf(COINS, uuid);      // CompletableFuture<Long>, 名次从 1 开始,
 Entity<UUID> target = player.entity(targetId);
 
 target.read(COINS);              // CompletableFuture<T>, 读最新的值
-Long coins = target.peek(COINS); // 同步读本服的快照. 还没加载时返回 null 并在后台开始加载
+Long coins = target.readCachedOrNull(COINS);        // 同步读本服的快照. 还没缓存时返回 null 并在后台开始加载
+target.readCachedOrNull(COINS, false);              // 只读已有的快照, 没有也不加载
+target.isCached(COINS);                             // 现在能不能读到. 没有默认值的键缓存到的值也可能是 null, 用它区分
 ```
 
 快照在数据变化时自动刷新，`snapshotExpiry` 内没人读就丢掉。
@@ -173,15 +176,15 @@ Long coins = target.peek(COINS); // 同步读本服的快照. 还没加载时返
 ### watch 和 pin
 
 ```java
-// watch: 值变了就回调. 回调不带值, 用 peek 读
-Watch watch = target.watch(COINS, () -> menu.refresh(target.peek(COINS)));
-watch.ready().thenRun(() -> menu.open(target.peek(COINS)));   // ready 在 peek 能读到值时完成
+// watch: 值变了就回调. 回调不带值, 用 readCachedOrNull 读
+Watch watch = target.watch(COINS, () -> menu.refresh(target.readCachedOrNull(COINS)));
+watch.ready().thenRun(() -> menu.open(target.readCachedOrNull(COINS)));   // ready 在快照可读时完成
 watch.close();                                                // 用完必须关
 
 // pin: 只让快照保持加载, 不回调. 玩家在线期间需要同步读时用
 Pin pin = target.pin(COINS);
 pin.ready().join();
-long balance = target.peek(COINS);                            // close 之前不会是 null
+long balance = target.readCachedOrNull(COINS);                // close 之前一直读得到
 pin.close();
 ```
 
@@ -198,11 +201,11 @@ pin.close();
 ViewKey<UUID, List<Home>> HOMES = player.view(Key.sparrow("homes"), owner -> homeStore.load(owner)).register();
 
 Entity<UUID> entity = player.entity(owner);
-entity.peek(HOMES);                       // peek / read / watch / pin 和其他键一样用
+entity.readCachedOrNull(HOMES);           // readCachedOrNull / read / watch / pin 和其他键一样用
 entity.read(HOMES);                       // 每次都调用 loader
 
 // 改完自己的表之后通知一声: 本服重读快照, 其他服也重读
-homeStore.create(home).thenCompose(done -> entity.invalidate(HOMES));   // future 完成时本服 peek 已是新数据
+homeStore.create(home).thenCompose(done -> entity.invalidate(HOMES));   // future 完成时本服读到的已是新数据
 ```
 
 加载出来的对象被所有读取方共用，不要修改。只有视图键的实体类型不建表。

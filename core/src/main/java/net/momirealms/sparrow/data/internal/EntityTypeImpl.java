@@ -49,7 +49,6 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -111,8 +110,8 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
-    public <T> MemoryKeyBuilder<K, Optional<T>> memory(@NotNull Key id, @NotNull ValueCodec<T> codec) {
-        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.OptionalCodecForm<>(codec));
+    public <T> MemoryKeyBuilder<K, @Nullable T> memory(@NotNull Key id, @NotNull ValueCodec<T> codec) {
+        return new MemoryKeyBuilderImpl<>(this, id, new ValueForm.CodecForm<>(codec, null));
     }
 
     @NotNull
@@ -129,8 +128,8 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
 
     @NotNull
     @Override
-    public <T> DbKeyBuilder<K, Optional<T>> db(@NotNull Key id, @NotNull ValueCodec<T> codec) {
-        return new DbKeyBuilderImpl<>(this, id, new ValueForm.OptionalCodecForm<>(codec));
+    public <T> DbKeyBuilder<K, @Nullable T> db(@NotNull Key id, @NotNull ValueCodec<T> codec) {
+        return new DbKeyBuilderImpl<>(this, id, new ValueForm.CodecForm<>(codec, null));
     }
 
     @NotNull
