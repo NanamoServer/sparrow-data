@@ -1,7 +1,6 @@
 package net.momirealms.sparrow.data.internal.sync;
 
 import io.netty.buffer.ByteBuf;
-import net.momirealms.sparrow.data.util.ByteBufUtils;
 import net.momirealms.sparrow.data.storage.StoredValue;
 import net.momirealms.sparrow.message.MessageIdentifier;
 import net.momirealms.sparrow.message.message.OneWayMessage;
@@ -36,7 +35,7 @@ public final class OverrideMessage extends OneWayMessage {
         this.entityType = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.entityId = ByteBufHelper.readByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
         this.keyId = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.entry = ByteBufUtils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
+        this.entry = Utils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.value = StoredValueCodec.read(buf);
     }
 
@@ -44,7 +43,7 @@ public final class OverrideMessage extends OneWayMessage {
         ByteBufHelper.writeUtf8(buf, this.entityType, DataMessenger.MAX_TEXT_LENGTH);
         ByteBufHelper.writeByteArray(buf, this.entityId);
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
-        ByteBufUtils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
+        Utils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
         StoredValueCodec.write(buf, this.value);
     }
 

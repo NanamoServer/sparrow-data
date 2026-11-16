@@ -1,7 +1,6 @@
 package net.momirealms.sparrow.data.internal.sync;
 
 import io.netty.buffer.ByteBuf;
-import net.momirealms.sparrow.data.util.ByteBufUtils;
 import net.momirealms.sparrow.message.MessageIdentifier;
 import net.momirealms.sparrow.message.message.OneWayMessage;
 import net.momirealms.sparrow.message.util.ByteBufHelper;
@@ -32,16 +31,16 @@ public final class InvalidateMessage extends OneWayMessage {
     InvalidateMessage(@NotNull DataMessenger messenger, @NotNull ByteBuf buf) {
         this.messenger = messenger;
         this.entityType = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.entityId = ByteBufUtils.readNullableByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
-        this.keyId = ByteBufUtils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.entry = ByteBufUtils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
+        this.entityId = Utils.readNullableByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
+        this.keyId = Utils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
+        this.entry = Utils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
     }
 
     void write(@NotNull ByteBuf buf) {
         ByteBufHelper.writeUtf8(buf, this.entityType, DataMessenger.MAX_TEXT_LENGTH);
-        ByteBufUtils.writeNullableByteArray(buf, this.entityId);
-        ByteBufUtils.writeNullableUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
-        ByteBufUtils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
+        Utils.writeNullableByteArray(buf, this.entityId);
+        Utils.writeNullableUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
+        Utils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
     }
 
     @Override

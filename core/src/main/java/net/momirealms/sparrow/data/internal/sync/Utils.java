@@ -1,4 +1,4 @@
-package net.momirealms.sparrow.data.util;
+package net.momirealms.sparrow.data.internal.sync;
 
 import io.netty.buffer.ByteBuf;
 import net.momirealms.sparrow.message.util.ByteBufHelper;
@@ -6,11 +6,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-@ApiStatus.Internal
-public final class ByteBufUtils {
-
-    private ByteBufUtils() {
-    }
+final class Utils {
 
     // 可以为空的字段先写一个 boolean 表示有没有值, 有值时再按 ByteBufHelper 的格式写内容
     public static void writeNullableUtf8(@NotNull ByteBuf buf, @Nullable String text, int maxLength) {
