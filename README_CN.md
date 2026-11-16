@@ -19,7 +19,7 @@ repositories {
 }
 
 dependencies {
-    implementation("net.momirealms:sparrow-data:0.0.4")
+    implementation("net.momirealms:sparrow-data:0.0.5")
 }
 ```
 
