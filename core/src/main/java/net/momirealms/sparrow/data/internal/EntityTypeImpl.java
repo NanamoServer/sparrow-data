@@ -9,18 +9,14 @@ import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.db.DbOperations;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.KeyRegistry;
-import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.RosterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbCounterKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.DbKeyBuilderImpl;
-import net.momirealms.sparrow.data.internal.key.builder.DbMapCounterKeyBuilderImpl;
-import net.momirealms.sparrow.data.internal.key.builder.DbMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.MemoryLongKeyBuilderImpl;
-import net.momirealms.sparrow.data.internal.key.builder.MemoryMapKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.RosterKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.key.builder.ViewKeyBuilderImpl;
 import net.momirealms.sparrow.data.internal.memory.Backfill;
@@ -31,7 +27,6 @@ import net.momirealms.sparrow.data.internal.snapshot.SnapshotCache;
 import net.momirealms.sparrow.data.internal.watch.WatchHub;
 import net.momirealms.sparrow.data.internal.sync.DataMessenger;
 import net.momirealms.sparrow.data.key.DataKey;
-import net.momirealms.sparrow.data.key.EntryKeyCodec;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.SortableKey;
@@ -39,11 +34,8 @@ import net.momirealms.sparrow.data.key.ValueCodec;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.builder.DbCounterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.DbKeyBuilder;
-import net.momirealms.sparrow.data.key.builder.DbMapCounterKeyBuilder;
-import net.momirealms.sparrow.data.key.builder.DbMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.MemoryLongKeyBuilder;
-import net.momirealms.sparrow.data.key.builder.MemoryMapKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.RosterKeyBuilder;
 import net.momirealms.sparrow.data.key.builder.ViewKeyBuilder;
 import net.momirealms.sparrow.data.storage.EntityRef;
@@ -55,8 +47,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -131,13 +121,6 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         return new MemoryLongKeyBuilderImpl<>(this, id);
     }
 
-    // 映射键的条目没有默认值, 条目不存在时读到 null
-    @NotNull
-    @Override
-    public <E, V> MemoryMapKeyBuilder<K, E, V> memoryMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec) {
-        return new MemoryMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.CodecForm<>(valueCodec, null));
-    }
-
     @NotNull
     @Override
     public <T> DbKeyBuilder<K, T> db(@NotNull Key id, @NotNull ValueCodec<T> codec, @NotNull T defaultValue) {
@@ -154,18 +137,6 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     @Override
     public DbCounterKeyBuilder<K> dbCounter(@NotNull Key id) {
         return new DbCounterKeyBuilderImpl<>(this, id);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> DbMapKeyBuilder<K, E, V> dbMap(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec, @NotNull ValueCodec<V> valueCodec) {
-        return new DbMapKeyBuilderImpl<>(this, id, entryCodec, new ValueForm.CodecForm<>(valueCodec, null));
-    }
-
-    @NotNull
-    @Override
-    public <E> DbMapCounterKeyBuilder<K, E> dbMapCounter(@NotNull Key id, @NotNull EntryKeyCodec<E> entryCodec) {
-        return new DbMapCounterKeyBuilderImpl<>(this, id, entryCodec);
     }
 
     @NotNull
@@ -234,7 +205,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
                 },
                 this.service.executor()
         )
-                .thenRun(() -> this.service.messenger().invalidate(this.name, null, keyId, null));
+                .thenRun(() -> this.service.messenger().invalidate(this.name, null, keyId));
     }
 
     @NotNull
@@ -261,23 +232,23 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         EntityRef ref = this.ref(id);
         return CompletableFuture.supplyAsync(() -> {
             EntityStorage storage = this.service.storage();
-            long value = impl.form().load(storage.read(ref, impl.storageKey(), null));
+            long value = impl.form().load(storage.read(ref, impl.storageKey()));
             return storage.countAbove(this.name, impl.storageKey(), value) + 1;
         }, this.service.executor());
     }
 
     // 在 Redis 的订阅线程上调用. 这里只解码实体 ID, 快照的重读在宿主的 Executor 上进行
     @Override
-    public void invalidate(byte @Nullable [] entityId, @Nullable String keyId, @Nullable String entry) {
-        this.snapshots.invalidate(entityId == null ? null : this.idCodec.decode(entityId), keyId, entry);
+    public void invalidate(byte @Nullable [] entityId, @Nullable String keyId) {
+        this.snapshots.invalidate(entityId == null ? null : this.idCodec.decode(entityId), keyId);
     }
 
     // 对快照来说覆盖和失效一样, 重读一次. 本服持有或者正在加载这个实体时, 还要把新值交给持有端
     @Override
-    public void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
+    public void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
         K id = this.idCodec.decode(entityId);
-        this.snapshots.invalidate(id, keyId, entry);
-        this.overrides.receive(id, keyId, entry, value);
+        this.snapshots.invalidate(id, keyId);
+        this.overrides.receive(id, keyId, value);
     }
 
     // 收到持有方 publish 的值. 本服在看这个对象时直接把值放进快照, 不重读库; 没人在看就不解码
@@ -286,15 +257,7 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
         K id = this.idCodec.decode(entityId);
         if (!this.snapshots.isWatched(id, keyId)) return;
         if (!(this.keys.get(Key.of(keyId)) instanceof ValueKeyImpl<?, ?> key)) return;
-        this.snapshots.put(id, keyId, null, key.form().load(value));
-    }
-
-    @Override
-    public void publishEntries(byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries) {
-        K id = this.idCodec.decode(entityId);
-        if (!this.snapshots.isWatched(id, keyId)) return;
-        if (!(this.keys.get(Key.of(keyId)) instanceof MapKeyImpl<?, ?, ?> key)) return;
-        this.putEntries(id, keyId, key, entries);
+        this.snapshots.put(id, keyId, key.form().load(value));
     }
 
     // 编码后的实体 ID 超过 64 字节时抛 IllegalArgumentException, 宿主自定义的编码器也一样
@@ -382,17 +345,5 @@ public final class EntityTypeImpl<K> implements EntityType<K>, DataMessenger.Lis
     @NotNull
     public Backfill<K> backfill() {
         return this.backfill;
-    }
-
-    // 整个映射的快照用解码后的条目键, 单个条目的快照用编码后的条目键
-    private <E, V> void putEntries(@NotNull K id, @NotNull String keyId, @NotNull MapKeyImpl<?, E, V> key, @NotNull Map<String, StoredValue> stored) {
-        Map<String, V> entries = HashMap.newHashMap(stored.size());
-        Map<E, V> all = HashMap.newHashMap(stored.size());
-        stored.forEach((entry, value) -> {
-            V decoded = key.valueForm().load(value);
-            entries.put(entry, decoded);
-            all.put(key.entryCodec().decode(entry), decoded);
-        });
-        this.snapshots.putEntries(id, keyId, Collections.unmodifiableMap(all), entries);
     }
 }

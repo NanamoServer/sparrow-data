@@ -3,10 +3,7 @@ package net.momirealms.sparrow.data;
 import net.momirealms.sparrow.data.entity.Entity;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
-import net.momirealms.sparrow.data.key.DbMapCounterKey;
-import net.momirealms.sparrow.data.key.DbMapKey;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.OptionalLong;
 import java.util.function.UnaryOperator;
@@ -25,24 +22,6 @@ public interface Transaction {
 
     @NotNull
     <K> OptionalLong take(@NotNull Entity<K> entity, @NotNull DbCounterKey<K> key, long amount);
-
-    <K, E, V> void put(@NotNull Entity<K> entity, @NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    <K, E, V> boolean putIfAbsent(@NotNull Entity<K> entity, @NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    @Nullable
-    <K, E, V> V update(@NotNull Entity<K> entity, @NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<V> operator);
-
-    <K, E> boolean remove(@NotNull Entity<K> entity, @NotNull DbMapKey<K, E, ?> key, @NotNull E entry);
-
-    <K, E> void set(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long value);
-
-    <K, E> long add(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long delta);
-
-    @NotNull
-    <K, E> OptionalLong take(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long amount);
-
-    <K, E> boolean remove(@NotNull Entity<K> entity, @NotNull DbMapCounterKey<K, E> key, @NotNull E entry);
 
     // 标记这次事务回滚. body 照常 return, 返回值仍然交给调用方, 已经执行的写入全部撤销
     void rollback();

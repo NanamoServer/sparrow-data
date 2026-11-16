@@ -5,9 +5,6 @@ import net.momirealms.sparrow.data.entity.Pin;
 import net.momirealms.sparrow.data.entity.Watch;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
 import net.momirealms.sparrow.data.internal.key.DbKeyImpl;
-import net.momirealms.sparrow.data.internal.key.DbMapCounterKeyImpl;
-import net.momirealms.sparrow.data.internal.key.DbMapKeyImpl;
-import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.RosterKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ViewKeyImpl;
@@ -15,12 +12,8 @@ import net.momirealms.sparrow.data.internal.memory.HeldEntity;
 import net.momirealms.sparrow.data.key.DataKey;
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
-import net.momirealms.sparrow.data.key.DbMapCounterKey;
-import net.momirealms.sparrow.data.key.DbMapKey;
-import net.momirealms.sparrow.data.key.MapKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
-import net.momirealms.sparrow.data.key.MemoryMapKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
@@ -29,7 +22,6 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.UnaryOperator;
@@ -58,7 +50,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <T> void write(@NotNull MemoryKey<K, T> key, @NotNull T value) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         this.requireHeld().write(impl, value);
-        this.type.watches().touch(this.id, impl.storageKey().id(), null);
+        this.type.watches().touch(this.id, impl.storageKey().id());
     }
 
     @NotNull
@@ -66,46 +58,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     public <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
         T value = this.requireHeld().update(impl, operator);
-        this.type.watches().touch(this.id, impl.storageKey().id(), null);
-        return value;
-    }
-
-    @Nullable
-    @Override
-    public <E, V> V get(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        return this.requireHeld().get(impl, impl.entryCodec().encode(entry));
-    }
-
-    @NotNull
-    @Override
-    public <E, V> Map<E, V> getAll(@NotNull MemoryMapKey<K, E, V> key) {
-        return this.requireHeld().getAll((MapKeyImpl<K, E, V>) key);
-    }
-
-    @Override
-    public <E, V> void put(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        String encoded = impl.entryCodec().encode(entry);
-        this.requireHeld().put(impl, encoded, value);
-        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
-    }
-
-    @Override
-    public <E, V> void remove(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        String encoded = impl.entryCodec().encode(entry);
-        this.requireHeld().remove(impl, encoded);
-        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
-    }
-
-    @Nullable
-    @Override
-    public <E, V> V compute(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<@Nullable V> operator) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        String encoded = impl.entryCodec().encode(entry);
-        V value = this.requireHeld().compute(impl, encoded, operator);
-        this.type.watches().touch(this.id, impl.storageKey().id(), encoded);
+        this.type.watches().touch(this.id, impl.storageKey().id());
         return value;
     }
 
@@ -127,7 +80,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @Override
     public <T> CompletableFuture<Void> override(@NotNull MemoryKey<K, T> key, @NotNull T value) {
         ValueKeyImpl<K, T> impl = (ValueKeyImpl<K, T>) key;
-        return this.type.overrides().override(this.ref(), impl.storageKey(), null, impl.form(), value);
+        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.form(), value);
     }
 
     // 重置是删掉存储的值, 持有者把它读成默认值或 Optional.empty()
@@ -135,22 +88,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @Override
     public CompletableFuture<Void> reset(@NotNull MemoryKey<K, ?> key) {
         ValueKeyImpl<K, ?> impl = (ValueKeyImpl<K, ?>) key;
-        return this.type.overrides().override(this.ref(), impl.storageKey(), null, impl.form(), null);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<Void> override(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.entryCodec().encode(entry), impl.valueForm(), value);
-    }
-
-    // 重置映射键的条目就是删掉这个条目
-    @NotNull
-    @Override
-    public <E> CompletableFuture<Void> reset(@NotNull MemoryMapKey<K, E, ?> key, @NotNull E entry) {
-        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
-        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.entryCodec().encode(entry), impl.valueForm(), null);
+        return this.type.overrides().override(this.ref(), impl.storageKey(), impl.form(), null);
     }
 
     @NotNull
@@ -161,22 +99,8 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
 
     @NotNull
     @Override
-    public <E> Watch watch(@NotNull MapKey<K, E, ?> key, @NotNull E entry, @NotNull Runnable onChange) {
-        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
-        return this.type.watches().watch(this.id, impl, impl.entryCodec().encode(entry), onChange);
-    }
-
-    @NotNull
-    @Override
     public <T> Pin pin(@NotNull ValueKey<K, T> key) {
         return this.type.watches().watch(this.id, key, null);
-    }
-
-    @NotNull
-    @Override
-    public <E> Pin pin(@NotNull MapKey<K, E, ?> key, @NotNull E entry) {
-        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
-        return this.type.watches().watch(this.id, impl, impl.entryCodec().encode(entry), null);
     }
 
     // 本服的重读在调用线程上发起, 其他服靠广播的失效重读. 本服不会收到这条广播, 所以只读一次
@@ -223,60 +147,12 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
         return this.type.snapshots().peek(this.id, ((AbstractDataKey<K>) key).storageKey().id(), this.type.reader(this.id, key));
     }
 
-    @Nullable
-    @Override
-    public <E, V> V peek(@NotNull MapKey<K, E, V> key, @NotNull E entry) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        String encoded = impl.entryCodec().encode(entry);
-        HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return held.get(impl, encoded);
-        EntityRef ref = this.ref();
-        return this.type.snapshots().peekEntry(this.id, impl.storageKey().id(), encoded, () -> this.type.db().readEntry(ref, impl, encoded));
-    }
-
-    // 本服持有时内存键的条目总是已加载
-    @Override
-    public <E> boolean isLoaded(@NotNull MapKey<K, E, ?> key, @NotNull E entry) {
-        if (this.heldFor(key) != null) return true;
-        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
-        return this.type.snapshots().isEntryLoaded(this.id, impl.storageKey().id(), impl.entryCodec().encode(entry));
-    }
-
-    @Nullable
-    @Override
-    public <E, V> Map<E, V> peekAll(@NotNull MapKey<K, E, V> key) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return held.getAll(impl);
-        EntityRef ref = this.ref();
-        return this.type.snapshots().peek(this.id, impl.storageKey().id(), () -> this.type.db().readAll(ref, impl));
-    }
-
     @NotNull
     @Override
     public <T> CompletableFuture<T> read(@NotNull ValueKey<K, T> key) {
         HeldEntity<K> held = this.heldFor(key);
         if (held != null) return CompletableFuture.completedFuture(held.get((ValueKeyImpl<K, T>) key));
         return this.type.reader(this.id, key).get();
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<@Nullable V> read(@NotNull MapKey<K, E, V> key, @NotNull E entry) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        String encoded = impl.entryCodec().encode(entry);
-        HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return CompletableFuture.completedFuture(held.get(impl, encoded));
-        return this.type.db().readEntry(this.ref(), impl, encoded);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<Map<E, V>> readAll(@NotNull MapKey<K, E, V> key) {
-        MapKeyImpl<K, E, V> impl = (MapKeyImpl<K, E, V>) key;
-        HeldEntity<K> held = this.heldFor(key);
-        if (held != null) return CompletableFuture.completedFuture(held.getAll(impl));
-        return this.type.db().readAll(this.ref(), impl);
     }
 
     @NotNull
@@ -294,75 +170,19 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
     @NotNull
     @Override
     public CompletableFuture<Void> set(@NotNull DbCounterKey<K> key, long value) {
-        return this.type.db().setCount(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), null, value);
+        return this.type.db().setCount(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), value);
     }
 
     @NotNull
     @Override
     public CompletableFuture<Long> add(@NotNull DbCounterKey<K> key, long delta) {
-        return this.type.db().add(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), null, delta);
+        return this.type.db().add(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), delta);
     }
 
     @NotNull
     @Override
     public CompletableFuture<OptionalLong> take(@NotNull DbCounterKey<K> key, long amount) {
-        return this.type.db().take(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), null, amount);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<Void> put(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
-        DbMapKeyImpl<K, E, V> impl = (DbMapKeyImpl<K, E, V>) key;
-        return this.type.db().put(this.id, impl, impl.entryCodec().encode(entry), value);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<Boolean> putIfAbsent(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value) {
-        DbMapKeyImpl<K, E, V> impl = (DbMapKeyImpl<K, E, V>) key;
-        return this.type.db().putIfAbsent(this.id, impl, impl.entryCodec().encode(entry), value);
-    }
-
-    @NotNull
-    @Override
-    public <E, V> CompletableFuture<@Nullable V> update(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<V> operator) {
-        DbMapKeyImpl<K, E, V> impl = (DbMapKeyImpl<K, E, V>) key;
-        return this.type.db().updateEntry(this.id, impl, impl.entryCodec().encode(entry), operator);
-    }
-
-    @NotNull
-    @Override
-    public <E> CompletableFuture<Boolean> remove(@NotNull DbMapKey<K, E, ?> key, @NotNull E entry) {
-        MapKeyImpl<K, E, ?> impl = (MapKeyImpl<K, E, ?>) key;
-        return this.type.db().remove(this.id, impl, impl.entryCodec().encode(entry));
-    }
-
-    @NotNull
-    @Override
-    public <E> CompletableFuture<Void> set(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long value) {
-        DbMapCounterKeyImpl<K, E> impl = (DbMapCounterKeyImpl<K, E>) key;
-        return this.type.db().setCount(this.id, impl.storageKey(), impl.entryCodec().encode(entry), value);
-    }
-
-    @NotNull
-    @Override
-    public <E> CompletableFuture<Long> add(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long delta) {
-        DbMapCounterKeyImpl<K, E> impl = (DbMapCounterKeyImpl<K, E>) key;
-        return this.type.db().add(this.id, impl.storageKey(), impl.entryCodec().encode(entry), delta);
-    }
-
-    @NotNull
-    @Override
-    public <E> CompletableFuture<OptionalLong> take(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long amount) {
-        DbMapCounterKeyImpl<K, E> impl = (DbMapCounterKeyImpl<K, E>) key;
-        return this.type.db().take(this.id, impl.storageKey(), impl.entryCodec().encode(entry), amount);
-    }
-
-    @NotNull
-    @Override
-    public <E> CompletableFuture<Boolean> remove(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry) {
-        DbMapCounterKeyImpl<K, E> impl = (DbMapCounterKeyImpl<K, E>) key;
-        return this.type.db().remove(this.id, impl, impl.entryCodec().encode(entry));
+        return this.type.db().take(this.id, ((ValueKeyImpl<K, Long>) key).storageKey(), amount);
     }
 
     // 删除这个实体的全部数据. 在 Executor 上删库, 删完广播这个实体全部键的失效, future 在删库完成后结束.
@@ -380,7 +200,7 @@ public record EntityImpl<K>(@NotNull EntityTypeImpl<K> type, @NotNull K id) impl
                 },
                 service.executor()
         )
-                .thenRun(() -> service.messenger().invalidate(this.type.name(), ref.entityId(), null, null));
+                .thenRun(() -> service.messenger().invalidate(this.type.name(), ref.entityId(), null));
     }
 
     // 内存键的读写只有本服持有这个实体时才能用

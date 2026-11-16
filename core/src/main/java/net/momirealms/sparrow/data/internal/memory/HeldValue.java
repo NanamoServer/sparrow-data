@@ -48,9 +48,9 @@ public final class HeldValue<T> {
         taken.add((writes, removes) -> {
             StoredValue stored = this.form.store(value);
             if (stored == null) {
-                removes.add(new SaveBatch.Remove(this.key, null));
+                removes.add(new SaveBatch.Remove(this.key));
             } else {
-                writes.add(new SaveBatch.Write(this.key, null, stored));
+                writes.add(new SaveBatch.Write(this.key, stored));
             }
         });
     }

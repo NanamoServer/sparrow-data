@@ -8,7 +8,6 @@ import net.momirealms.sparrow.data.storage.StorageException;
 import net.momirealms.sparrow.data.storage.StorageKey;
 import net.momirealms.sparrow.data.storage.StoredEntity;
 import net.momirealms.sparrow.data.storage.StoredValue;
-import net.momirealms.sparrow.data.storage.sql.PathCodec;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -76,25 +75,18 @@ final class MysqlConnectionStorage implements EntityStorage {
         }
         return this.execute("load " + entity.entityType(), () -> {
             Map<String, StoredValue> values = new HashMap<>();
-            Map<String, Map<String, StoredValue>> entries = new HashMap<>();
             try (PreparedStatement statement = this.connection.prepareStatement(tables.selectRows())) {
                 statement.setBytes(1, entity.entityId());
                 try (ResultSet rows = statement.executeQuery()) {
                     while (rows.next()) {
-                        String path = rows.getString(1);
-                        String keyId = PathCodec.keyId(path);
-                        if (!dataKeys.contains(keyId)) continue;
-                        StoredValue value = readValue(rows, 2, 3);
-                        String entry = PathCodec.entry(path);
-                        if (entry == null) {
-                            values.put(keyId, value);
-                        } else {
-                            entries.computeIfAbsent(keyId, id -> new HashMap<>()).put(entry, value);
+                        String keyId = rows.getString(1);
+                        if (dataKeys.contains(keyId)) {
+                            values.put(keyId, readValue(rows, 2, 3));
                         }
                     }
                 }
             }
-            if (rankedKeys.isEmpty()) return new StoredEntity(values, entries);
+            if (rankedKeys.isEmpty()) return new StoredEntity(values);
             try (PreparedStatement statement = this.connection.prepareStatement(tables.selectRankedRows())) {
                 statement.setBytes(1, entity.entityId());
                 try (ResultSet rows = statement.executeQuery()) {
@@ -106,11 +98,11 @@ final class MysqlConnectionStorage implements EntityStorage {
                     }
                 }
             }
-            return new StoredEntity(values, entries);
+            return new StoredEntity(values);
         });
     }
 
-    // 调用方要在事务里调用. batch 里每个键和条目最多出现一次, 所以写入和删除可以各自批量执行
+    // 调用方要在事务里调用. batch 里每个键最多出现一次, 所以写入和删除可以各自批量执行
     @Override
     public void save(@NotNull EntityRef entity, @NotNull SaveBatch batch) {
         MysqlTables tables = this.tables(entity.entityType());
@@ -123,9 +115,9 @@ final class MysqlConnectionStorage implements EntityStorage {
                 int writeCount = writes.size();
                 for (int i = 0; i < writeCount; i++) {
                     SaveBatch.Write write = writes.get(i);
-                    boolean ranked = isRanked(write.key(), write.entry());
+                    boolean ranked = write.key().sortable();
                     PreparedStatement statement = ranked ? upsertRanked : upsertData;
-                    bindTarget(statement, 1, entity, write.key(), write.entry());
+                    bindTarget(statement, 1, entity, write.key());
                     bindValue(statement, ranked, write.value());
                     statement.addBatch();
                 }
@@ -133,8 +125,8 @@ final class MysqlConnectionStorage implements EntityStorage {
                 int removeCount = removes.size();
                 for (int i = 0; i < removeCount; i++) {
                     SaveBatch.Remove remove = removes.get(i);
-                    PreparedStatement statement = isRanked(remove.key(), remove.entry()) ? deleteRanked : deleteData;
-                    bindTarget(statement, 1, entity, remove.key(), remove.entry());
+                    PreparedStatement statement = remove.key().sortable() ? deleteRanked : deleteData;
+                    bindTarget(statement, 1, entity, remove.key());
                     statement.addBatch();
                 }
                 upsertData.executeBatch();
@@ -148,19 +140,19 @@ final class MysqlConnectionStorage implements EntityStorage {
 
     @Nullable
     @Override
-    public StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
+    public StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key) {
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("read " + key.id(), () -> {
-            if (isRanked(key, entry)) {
+            if (key.sortable()) {
                 try (PreparedStatement statement = this.connection.prepareStatement(this.lockReads ? tables.lockRanked() : tables.selectRanked())) {
-                    bindTarget(statement, 1, entity, key, entry);
+                    bindTarget(statement, 1, entity, key);
                     try (ResultSet rows = statement.executeQuery()) {
                         return rows.next() ? new StoredValue.OfLong(rows.getLong(1)) : null;
                     }
                 }
             }
             try (PreparedStatement statement = this.connection.prepareStatement(this.lockReads ? tables.lockRow() : tables.selectRow())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 try (ResultSet rows = statement.executeQuery()) {
                     return rows.next() ? readValue(rows, 1, 2) : null;
                 }
@@ -168,33 +160,13 @@ final class MysqlConnectionStorage implements EntityStorage {
         });
     }
 
-    @NotNull
     @Override
-    public Map<String, StoredValue> readEntries(@NotNull EntityRef entity, @NotNull StorageKey key) {
+    public void set(@NotNull EntityRef entity, @NotNull StorageKey key, @NotNull StoredValue value) {
         MysqlTables tables = this.tables(entity.entityType());
-        return this.execute("read entries of " + key.id(), () -> {
-            Map<String, StoredValue> entries = new HashMap<>();
-            try (PreparedStatement statement = this.connection.prepareStatement(tables.selectEntries())) {
-                statement.setBytes(1, entity.entityId());
-                statement.setString(2, PathCodec.entriesFrom(key.id()));
-                statement.setString(3, PathCodec.entriesTo(key.id()));
-                try (ResultSet rows = statement.executeQuery()) {
-                    while (rows.next()) {
-                        entries.put(PathCodec.entry(rows.getString(1)), readValue(rows, 2, 3));
-                    }
-                }
-            }
-            return entries;
-        });
-    }
-
-    @Override
-    public void set(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, @NotNull StoredValue value) {
-        MysqlTables tables = this.tables(entity.entityType());
-        boolean ranked = isRanked(key, entry);
+        boolean ranked = key.sortable();
         this.execute("set " + key.id(), () -> {
             try (PreparedStatement statement = this.connection.prepareStatement(ranked ? tables.upsertRanked() : tables.upsertData())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 bindValue(statement, ranked, value);
                 statement.executeUpdate();
             }
@@ -203,13 +175,13 @@ final class MysqlConnectionStorage implements EntityStorage {
     }
 
     @Override
-    public boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @Nullable [] expected, byte @NotNull [] value) {
+    public boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, byte @Nullable [] expected, byte @NotNull [] value) {
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("compare and set " + key.id(), () -> {
             if (expected == null) {
                 // 主键冲突说明已经有值. MySQL 只回滚出错的这一条语句, 所在的事务可以继续
                 try (PreparedStatement statement = this.connection.prepareStatement(tables.insertData())) {
-                    bindTarget(statement, 1, entity, key, entry);
+                    bindTarget(statement, 1, entity, key);
                     statement.setBytes(3, value);
                     statement.executeUpdate();
                     return true;
@@ -219,7 +191,7 @@ final class MysqlConnectionStorage implements EntityStorage {
             }
             try (PreparedStatement statement = this.connection.prepareStatement(tables.compareAndSetData())) {
                 statement.setBytes(1, value);
-                bindTarget(statement, 2, entity, key, entry);
+                bindTarget(statement, 2, entity, key);
                 statement.setBytes(4, expected);
                 return statement.executeUpdate() > 0;
             }
@@ -227,11 +199,11 @@ final class MysqlConnectionStorage implements EntityStorage {
     }
 
     @Override
-    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected) {
+    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, byte @NotNull [] expected) {
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("compare and remove " + key.id(), () -> {
             try (PreparedStatement statement = this.connection.prepareStatement(tables.compareAndRemoveData())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 statement.setBytes(3, expected);
                 return statement.executeUpdate() > 0;
             }
@@ -239,11 +211,11 @@ final class MysqlConnectionStorage implements EntityStorage {
     }
 
     @Override
-    public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
+    public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key) {
         MysqlTables tables = this.tables(entity.entityType());
         return this.execute("remove " + key.id(), () -> {
-            try (PreparedStatement statement = this.connection.prepareStatement(isRanked(key, entry) ? tables.deleteRanked() : tables.deleteRow())) {
-                bindTarget(statement, 1, entity, key, entry);
+            try (PreparedStatement statement = this.connection.prepareStatement(key.sortable() ? tables.deleteRanked() : tables.deleteRow())) {
+                bindTarget(statement, 1, entity, key);
                 return statement.executeUpdate() > 0;
             }
         });
@@ -251,17 +223,17 @@ final class MysqlConnectionStorage implements EntityStorage {
 
     // 调用方要在事务里调用. MySQL 没有 RETURNING, upsert 之后在同一个事务里加锁读回新值, 这期间这一行一直被锁着
     @Override
-    public long add(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long delta) {
+    public long add(@NotNull EntityRef entity, @NotNull StorageKey key, long delta) {
         MysqlTables tables = this.tables(entity.entityType());
-        boolean ranked = isRanked(key, entry);
+        boolean ranked = key.sortable();
         return this.execute("add to " + key.id(), () -> {
             try (PreparedStatement statement = this.connection.prepareStatement(ranked ? tables.addRanked() : tables.addData())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 statement.setLong(3, delta);
                 statement.executeUpdate();
             }
             try (PreparedStatement statement = this.connection.prepareStatement(ranked ? tables.lockRanked() : tables.lockRow())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 try (ResultSet rows = statement.executeQuery()) {
                     rows.next();
                     return rows.getLong(1);
@@ -273,13 +245,13 @@ final class MysqlConnectionStorage implements EntityStorage {
     // 调用方要在事务里调用. 先加锁读出余额, 判断够不够再写回, 判断和扣减之间别人改不了这一行. 返回扣减后的余额
     @NotNull
     @Override
-    public OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long amount) {
+    public OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, long amount) {
         MysqlTables tables = this.tables(entity.entityType());
-        boolean ranked = isRanked(key, entry);
+        boolean ranked = key.sortable();
         return this.execute("take from " + key.id(), () -> {
             long balance;
             try (PreparedStatement statement = this.connection.prepareStatement(ranked ? tables.lockRanked() : tables.lockRow())) {
-                bindTarget(statement, 1, entity, key, entry);
+                bindTarget(statement, 1, entity, key);
                 try (ResultSet rows = statement.executeQuery()) {
                     if (!rows.next()) return OptionalLong.empty();
                     balance = rows.getLong(1);
@@ -288,7 +260,7 @@ final class MysqlConnectionStorage implements EntityStorage {
             if (balance < amount) return OptionalLong.empty();
             try (PreparedStatement statement = this.connection.prepareStatement(ranked ? tables.updateRankedNum() : tables.updateDataNum())) {
                 statement.setLong(1, balance - amount);
-                bindTarget(statement, 2, entity, key, entry);
+                bindTarget(statement, 2, entity, key);
                 statement.executeUpdate();
             }
             return OptionalLong.of(balance - amount);
@@ -351,7 +323,7 @@ final class MysqlConnectionStorage implements EntityStorage {
     public void purge(@NotNull String entityType, @NotNull String keyId) {
         MysqlTables tables = this.tables(entityType);
         this.execute("purge " + keyId, () -> {
-            this.deleteInBatches(tables.purgeDataBatch(PURGE_BATCH_SIZE), keyId, PathCodec.entriesFrom(keyId), PathCodec.entriesTo(keyId));
+            this.deleteInBatches(tables.purgeDataBatch(PURGE_BATCH_SIZE), keyId);
             this.deleteInBatches(tables.purgeRankedBatch(PURGE_BATCH_SIZE), keyId);
             return null;
         });
@@ -394,15 +366,10 @@ final class MysqlConnectionStorage implements EntityStorage {
         }
     }
 
-    // 普通键声明了 sortable 时, 值在排行表里; 其他情况都在数据表里
-    private static boolean isRanked(@NotNull StorageKey key, @Nullable String entry) {
-        return key.sortable() && entry == null;
-    }
-
     // 数据表按 (entity_id, path) 定位一行, 排行表按 (entity_id, data_key) 定位, 两者的参数顺序相同
-    private static void bindTarget(@NotNull PreparedStatement statement, int index, @NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) throws SQLException {
+    private static void bindTarget(@NotNull PreparedStatement statement, int index, @NotNull EntityRef entity, @NotNull StorageKey key) throws SQLException {
         statement.setBytes(index, entity.entityId());
-        statement.setString(index + 1, isRanked(key, entry) ? key.id() : PathCodec.path(key.id(), entry));
+        statement.setString(index + 1, key.id());
     }
 
     // 值从第 3 个参数开始. 排行表只有 num 列; 数据表的一行只有 num 或 val 其中一个有值

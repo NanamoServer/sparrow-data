@@ -75,51 +75,43 @@ public final class DataMessenger {
     }
 
     // 广播给所有服务器, 包括本服自己. 范围的含义见 InvalidateMessage 的构造器
-    public void invalidate(@NotNull String entityType, byte @Nullable [] entityId, @Nullable String keyId, @Nullable String entry) {
-        this.broker.publishAll(new InvalidateMessage(this, entityType, entityId, keyId, entry));
+    public void invalidate(@NotNull String entityType, byte @Nullable [] entityId, @Nullable String keyId) {
+        this.broker.publishAll(new InvalidateMessage(this, entityType, entityId, keyId));
     }
 
     // 视图键失效时用, 本服自己已经发起重读, 只通知别的服
     public void invalidateOthers(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId) {
-        this.broker.publishOthers(new InvalidateMessage(this, entityType, entityId, keyId, null));
+        this.broker.publishOthers(new InvalidateMessage(this, entityType, entityId, keyId));
     }
 
-    public void override(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
-        this.broker.publishAll(new OverrideMessage(this, entityType, entityId, keyId, entry, value));
+    public void override(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
+        this.broker.publishAll(new OverrideMessage(this, entityType, entityId, keyId, value));
     }
 
     // value 为空表示 publish 的是"没有值"
     public void publishValue(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
-        this.broker.publishAll(new PublishMessage(this, entityType, entityId, keyId, value, null));
-    }
-
-    public void publishEntries(@NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries) {
-        this.broker.publishAll(new PublishMessage(this, entityType, entityId, keyId, null, entries));
+        this.broker.publishAll(new PublishMessage(this, entityType, entityId, keyId, value));
     }
 
     // broker 在 Redis 的订阅线程上调用. 这里只按实体类型找到监听者, 本服没有这个实体类型时忽略
     void receive(@NotNull InvalidateMessage message) {
         Listener listener = this.listeners.get(message.entityType());
         if (listener != null) {
-            listener.invalidate(message.entityId(), message.keyId(), message.entry());
+            listener.invalidate(message.entityId(), message.keyId());
         }
     }
 
     void receive(@NotNull OverrideMessage message) {
         Listener listener = this.listeners.get(message.entityType());
         if (listener != null) {
-            listener.override(message.entityId(), message.keyId(), message.entry(), message.value());
+            listener.override(message.entityId(), message.keyId(), message.value());
         }
     }
 
     void receive(@NotNull PublishMessage message) {
         Listener listener = this.listeners.get(message.entityType());
-        if (listener == null) return;
-        Map<String, StoredValue> entries = message.entries();
-        if (entries == null) {
+        if (listener != null) {
             listener.publishValue(message.entityId(), message.keyId(), message.value());
-        } else {
-            listener.publishEntries(message.entityId(), message.keyId(), entries);
         }
     }
 
@@ -148,12 +140,10 @@ public final class DataMessenger {
     // 一个实体类型的消息接收方, 在 Redis 的订阅线程上直接处理. 解码和写进内存都只要微秒, 读库这类要等的事交给宿主的 Executor
     public interface Listener {
 
-        void invalidate(byte @Nullable [] entityId, @Nullable String keyId, @Nullable String entry);
+        void invalidate(byte @Nullable [] entityId, @Nullable String keyId);
 
-        void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value);
+        void override(byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value);
 
         void publishValue(byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value);
-
-        void publishEntries(byte @NotNull [] entityId, @NotNull String keyId, @NotNull Map<String, StoredValue> entries);
     }
 }

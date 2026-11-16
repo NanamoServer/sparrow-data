@@ -64,20 +64,18 @@ EntityType<UUID> player = data.registerEntityType("player", EntityIdCodec.UUID);
 MemoryKey<UUID, Integer> mana = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();
 MemoryKey<UUID, Optional<String>> title = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();
 SortableMemoryKey<UUID> level = player.memoryLong(Key.sparrow("level")).sortable().register().join();
-MemoryMapKey<UUID, String, Home> homes = player.memoryMap(Key.sparrow("homes"), EntryKeyCodec.STRING, HOME).register().join();
 
 // DB 键: register() 返回时就能用
 DbKey<UUID, Profile> profile = player.db(Key.sparrow("profile"), PROFILE, Profile.EMPTY).register();
 SortableDbCounterKey<UUID> coins = player.dbCounter(Key.sparrow("coins")).scale(2).sortable().register();
-DbMapKey<UUID, String, Mail> mailbox = player.dbMap(Key.sparrow("mailbox"), EntryKeyCodec.STRING, MAIL).register();
-DbMapCounterKey<UUID, String> tokens = player.dbMapCounter(Key.sparrow("tokens"), EntryKeyCodec.STRING).register();
 ```
 
 - 类型名是 1 到 32 个 `[a-z0-9_]` 字符。键 ID 最多 64 个字符，不能含 `.`。实体 ID 编码后最多 64 字节。
 - 注册时不给默认值，值类型就是 `Optional<T>`；写入 `Optional.empty()` 就是删掉存储的值。
-- `memoryLong` 键和 DB 计数键可以声明 `sortable()`，之后能用 `top` 和 `rankOf`。映射计数键不能排行。
+- `memoryLong` 键和 DB 计数键可以声明 `sortable()`，之后能用 `top` 和 `rankOf`。
 - 键可以在运行中注册和注销。`unregister` 保留数据；`purge(Key)` 跨所有实体删掉一个键的数据，只能在没有任何服务器还注册着这个键时调用。
 - `entity.delete()` 删掉一个实体的全部数据，调用时不能有服务器持有它。
+- 没有映射类型的键。条目固定或来自配置时，每个条目注册一个键，例如每个币种一个计数键；条目不固定但数量少时，把整个集合放进一个值，例如 `MemoryKey<UUID, List<Home>>`；条目多或者需要查询和约束时，用自己的表加视图键。
 
 ## 内存权威
 
@@ -89,7 +87,6 @@ player.residence().online(uuid);          // 读出内存键, 开始定时落库
 Entity<UUID> entity = player.entity(uuid);
 entity.write(mana, 80);
 entity.update(level, current -> current + 1);
-entity.put(homes, "base", home);
 int value = entity.get(mana);
 
 entity.publish(mana);                     // 把当前值推进其他服的快照, 不落库
@@ -99,7 +96,7 @@ player.residence().offline(uuid);         // 先释放, 再把释放之前写的
 ```
 
 - 内存键只能在持有者上读写，在其他地方调用会抛 `IllegalStateException`。同一个实体的所有修改和落库由一把实体级的锁串行执行。
-- 读出来的值不能原地修改，要改就在 `update` / `compute` 里返回新值。
+- 读出来的值不能原地修改，要改就在 `update` 里返回新值。
 - 其他服务器用 `peek` 读快照（还没加载时返回 `null`，第一次调用会发起加载），或者用 `read` 拿一个直接读存储的 future。
 - `override(key, value)` / `reset(key)` 在任何服务器上都能调用，不管实体有没有被持有：新值写进存储，再推给持有者。
 - 服务器崩溃时没落库的内存数据会丢，丢多少取决于落库间隔。
@@ -114,7 +111,6 @@ entity.take(coins, price).thenAccept(balance -> {
     }
 });
 entity.update(profile, current -> current.withMotto("hello"));
-entity.putIfAbsent(mailbox, mailId, mail);
 
 CompletableFuture<TransferResult> result = data.transaction(tx -> {
     OptionalLong balance = tx.take(from, coins, amount);
@@ -132,7 +128,7 @@ player.rankOf(coins, uuid);
 
 - `update` 是以存储里的字节为条件的 CAS 循环，operator 可能执行多次，不能有副作用。新值编码后和原来字节相同时不写库，也不广播。
 - 事务体的返回值就是 future 的结果。正常返回时提交，调用过 `tx.rollback()` 时回滚，返回值仍然交给调用方。遇到死锁时事务体会重跑。事务体抛出的任何异常都会让事务回滚，包括 `Error`。提交之后，先用事务写进去的值更新本服已有的快照，再广播失效消息；回滚时两者都不做。
-- 计数键里不存在的值或条目当作 0。余额不够时 `take` 失败，什么都不写。
+- 计数键里不存在的值当作 0。余额不够时 `take` 失败，什么都不写。
 - `top` 和 `rankOf` 读的是排行表。内存键落库时才写进排行表，所以排行最多落后一个落库间隔。
 
 ## 观察标量值
@@ -241,7 +237,7 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 
 ## 观察值的变化
 
-`watch` 在一个键（或映射的一个条目）能看到的值可能变了时通知：本服持有这个实体时是持有容器里的值，其他情况是快照里的值。回调不带值，用 `peek` 读。
+`watch` 在一个键能看到的值可能变了时通知：本服持有这个实体时是持有容器里的值，其他情况是快照里的值。回调不带值，用 `peek` 读。
 
 ```java
 // 打开离线玩家的资料菜单, 不显示加载中, 之后跟着变
@@ -262,7 +258,7 @@ watch.close();
 
 ## 小数计数
 
-`dbCounter`、`dbMapCounter`、`memoryLong` 都可以设 `scale(int)`（0 到 18）。键存取的仍然是最小单位的 `long`，精度只用来换算：
+`dbCounter` 和 `memoryLong` 都可以设 `scale(int)`（0 到 18）。键存取的仍然是最小单位的 `long`，精度只用来换算：
 
 ```java
 long units = coins.toUnits(new BigDecimal("19.99"), RoundingMode.UNNECESSARY); // 1999
@@ -277,4 +273,4 @@ double forVault = coins.toDouble(units);
 
 - 假定 Redis 和数据库始终可用，丢失的消息和基础设施故障不做补偿。
 - 覆盖消息如果正好赶上持有者 `offline` 时的最终落库，这次覆盖可能会丢：最终落库把旧值写回了库，已经释放的持有者又丢掉了这条消息。
-- 条目值里嵌套的 map 整体存成一个值；映射计数键不能排行。
+- 放在一个值里的集合整体存成一行，每次修改都重写整个值。

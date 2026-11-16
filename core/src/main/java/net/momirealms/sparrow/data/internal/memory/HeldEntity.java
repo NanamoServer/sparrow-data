@@ -2,7 +2,6 @@ package net.momirealms.sparrow.data.internal.memory;
 
 import net.momirealms.sparrow.data.internal.DataServiceImpl;
 import net.momirealms.sparrow.data.internal.key.AbstractDataKey;
-import net.momirealms.sparrow.data.internal.key.MapKeyImpl;
 import net.momirealms.sparrow.data.internal.key.ValueForm;
 import net.momirealms.sparrow.data.internal.key.ValueKeyImpl;
 import net.momirealms.sparrow.data.storage.EntityRef;
@@ -37,19 +36,17 @@ public final class HeldEntity<K> {
     private final DataServiceImpl service;
 
     private final Map<AbstractDataKey<K>, HeldValue<?>> values;
-    private final Map<AbstractDataKey<K>, HeldEntries<?, ?>> entries;
 
     private final AtomicReference<CompletableFuture<Void>> lastSave = new AtomicReference<>(CompletableFuture.completedFuture(null));
     private volatile boolean released;
 
-    // 一个实体在本服持有期间的全部内存键值, 用这个对象的锁把所有修改, 落库取脏和 publish 串起来. 读单个值和单个条目不加锁, 值都是不可变对象.
+    // 一个实体在本服持有期间的全部内存键值, 用这个对象的锁把所有修改, 落库取脏和 publish 串起来. 读值不加锁, 值都是不可变对象.
     // 运行中注册和注销内存键时, 槽也是在锁里增减, 所以槽表用 ConcurrentHashMap, 不加锁的读一样能看到
     public HeldEntity(@NotNull K id, @NotNull EntityRef ref, @NotNull Slots<K> slots, @NotNull DataServiceImpl service) {
         this.id = id;
         this.ref = ref;
         this.service = service;
         this.values = new ConcurrentHashMap<>(slots.values());
-        this.entries = new ConcurrentHashMap<>(slots.entries());
     }
 
     // 把读出来的存储值解码成槽, 在锁外调用. 没有存储值的键, 有默认值的用默认值, 可选键用 Optional.empty()
@@ -57,34 +54,26 @@ public final class HeldEntity<K> {
     public static <K> Slots<K> decode(@NotNull List<AbstractDataKey<K>> keys, @NotNull StoredEntity stored) {
         int size = keys.size();
         Map<AbstractDataKey<K>, HeldValue<?>> values = HashMap.newHashMap(size);
-        Map<AbstractDataKey<K>, HeldEntries<?, ?>> entries = HashMap.newHashMap(size);
         for (int i = 0; i < size; i++) {
             AbstractDataKey<K> key = keys.get(i);
-            String keyId = key.storageKey().id();
-            if (key instanceof MapKeyImpl<?, ?, ?> map) {
-                entries.put(key, loadEntries(map, stored.entries().getOrDefault(keyId, Map.of())));
-            } else {
-                values.put(key, loadValue((ValueKeyImpl<?, ?>) key, stored.values().get(keyId)));
-            }
+            values.put(key, loadValue((ValueKeyImpl<?, ?>) key, stored.values().get(key.storageKey().id())));
         }
-        return new Slots<>(values, entries);
+        return new Slots<>(values);
     }
 
     public boolean has(@NotNull AbstractDataKey<K> key) {
-        return this.values.containsKey(key) || this.entries.containsKey(key);
+        return this.values.containsKey(key);
     }
 
     // 补读或者 online 补上缺的键时调用. 已经释放的容器不再加槽
     public synchronized void attach(@NotNull Slots<K> slots) {
         if (this.released) return;
         this.values.putAll(slots.values());
-        this.entries.putAll(slots.entries());
     }
 
     // online 放进持有表之前调用, 去掉加载期间被注销的键. 刚加载的容器里这些槽没有脏数据
     public synchronized void retain(@NotNull Collection<AbstractDataKey<K>> keys) {
         this.values.keySet().retainAll(keys);
-        this.entries.keySet().retainAll(keys);
     }
 
     @NotNull
@@ -107,53 +96,19 @@ public final class HeldEntity<K> {
         return value;
     }
 
-    @Nullable
-    public <V> V get(@NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry) {
-        return this.entries(key).get(entry);
-    }
-
-    @NotNull
-    public synchronized <E, V> Map<E, V> getAll(@NotNull MapKeyImpl<K, E, V> key) {
-        return this.entries(key).getAll();
-    }
-
-    public synchronized <V> void put(@NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry, @NotNull V value) {
-        this.requireHeld();
-        this.entries(key).put(entry, value);
-    }
-
-    public synchronized void remove(@NotNull MapKeyImpl<K, ?, ?> key, @NotNull String entry) {
-        this.requireHeld();
-        this.entries(key).remove(entry);
-    }
-
-    @Nullable
-    public synchronized <V> V compute(@NotNull MapKeyImpl<K, ?, V> key, @NotNull String entry, @NotNull UnaryOperator<@Nullable V> operator) {
-        this.requireHeld();
-        return this.entries(key).compute(entry, operator);
-    }
-
     // 收到覆盖时调用. 新值写进容器并标脏, 下一次落库会再写一遍, 盖掉在途落库可能写回库里的旧值.
     // 已经释放的容器不再应用; 键已经注销, 槽也摘掉了时跳过
-    public synchronized void override(@NotNull AbstractDataKey<K> key, @Nullable String entry, @Nullable StoredValue stored) {
+    public synchronized void override(@NotNull AbstractDataKey<K> key, @Nullable StoredValue stored) {
         if (this.released) return;
         HeldValue<?> value = this.values.get(key);
-        HeldEntries<?, ?> entries = this.entries.get(key);
         if (value != null) value.overwrite(stored);
-        if (entries != null) entries.overwrite(entry, stored);
     }
 
-    // 广播这个键的当前值, 不落库, 观察方直接把值放进快照, 映射键发全部条目. 取值, 编码和发送都在锁里,
+    // 广播这个键的当前值, 不落库, 观察方直接把值放进快照. 取值, 编码和发送都在锁里,
     // 同一个键的 publish 按调用顺序发出; 发送只是交给 broker 的连接, 不等 Redis 回复
     public synchronized void publish(@NotNull AbstractDataKey<K> key) {
         this.requireHeld();
-        String keyId = key.storageKey().id();
-        HeldValue<?> value = this.values.get(key);
-        if (value != null) {
-            this.service.messenger().publishValue(this.ref.entityType(), this.ref.entityId(), keyId, value.stored());
-            return;
-        }
-        this.service.messenger().publishEntries(this.ref.entityType(), this.ref.entityId(), keyId, this.entries.get(key).storedEntries());
+        this.service.messenger().publishValue(this.ref.entityType(), this.ref.entityId(), key.storageKey().id(), this.values.get(key).stored());
     }
 
     // 接在上一次落库后面, 轮到时在 Executor 上取脏再交给存储. 取脏发生在上一次存储调用结束之后, 所以写进库的顺序就是取脏的顺序
@@ -200,9 +155,6 @@ public final class HeldEntity<K> {
             for (HeldValue<?> slot : this.values.values()) {
                 slot.takeDirty(taken);
             }
-            for (HeldEntries<?, ?> slot : this.entries.values()) {
-                slot.takeDirty(taken);
-            }
         }
         this.store(taken);
     }
@@ -211,14 +163,12 @@ public final class HeldEntity<K> {
         List<Dirty> taken = new ArrayList<>();
         synchronized (this) {
             HeldValue<?> value = this.values.remove(key);
-            HeldEntries<?, ?> entries = this.entries.remove(key);
             if (value != null) value.takeDirty(taken);
-            if (entries != null) entries.takeDirty(taken);
         }
         this.store(taken);
     }
 
-    // 在锁外编码取出的脏数据, 主线程的修改不用等编码. 落库之后广播写到的每个键的失效, 映射键按整个键发, 观察方重读库
+    // 在锁外编码取出的脏数据, 主线程的修改不用等编码. 落库之后广播写到的每个键的失效, 观察方重读库
     private void store(@NotNull List<Dirty> taken) {
         if (taken.isEmpty()) return;
         List<SaveBatch.Write> writes = new ArrayList<>();
@@ -238,7 +188,7 @@ public final class HeldEntity<K> {
             keyIds.add(removes.get(i).key().id());
         }
         for (String keyId : keyIds) {
-            this.service.messenger().invalidate(this.ref.entityType(), this.ref.entityId(), keyId, null);
+            this.service.messenger().invalidate(this.ref.entityType(), this.ref.entityId(), keyId);
         }
     }
 
@@ -263,24 +213,10 @@ public final class HeldEntity<K> {
         return (HeldValue<T>) this.values.get(key);
     }
 
-    @SuppressWarnings("unchecked")
-    @NotNull
-    private <E, V> HeldEntries<E, V> entries(@NotNull MapKeyImpl<K, E, V> key) {
-        return (HeldEntries<E, V>) this.entries.get(key);
-    }
-
     @NotNull
     private static <T> HeldValue<T> loadValue(@NotNull ValueKeyImpl<?, T> key, @Nullable StoredValue stored) {
         ValueForm<T> form = key.form();
         return new HeldValue<>(key.storageKey(), form, form.load(stored));
-    }
-
-    @NotNull
-    private static <E, V> HeldEntries<E, V> loadEntries(@NotNull MapKeyImpl<?, E, V> key, @NotNull Map<String, StoredValue> stored) {
-        ValueForm<V> form = key.valueForm();
-        Map<String, V> entries = HashMap.newHashMap(stored.size());
-        stored.forEach((entry, value) -> entries.put(entry, form.load(value)));
-        return new HeldEntries<>(key.storageKey(), key.entryCodec(), form, entries);
     }
 
     // 一个槽在锁里取出的脏数据, 出锁以后再编码. 值都是不可变对象, 晚一点编码得到的字节一样
@@ -291,6 +227,6 @@ public final class HeldEntity<K> {
     }
 
     // 解码好的槽, 还没放进容器
-    public record Slots<K>(@NotNull Map<AbstractDataKey<K>, HeldValue<?>> values, @NotNull Map<AbstractDataKey<K>, HeldEntries<?, ?>> entries) {
+    public record Slots<K>(@NotNull Map<AbstractDataKey<K>, HeldValue<?>> values) {
     }
 }

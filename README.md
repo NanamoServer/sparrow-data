@@ -64,20 +64,18 @@ EntityType<UUID> player = data.registerEntityType("player", EntityIdCodec.UUID);
 MemoryKey<UUID, Integer> mana = player.memory(Key.sparrow("mana"), ValueCodecs.INT, 100).register().join();
 MemoryKey<UUID, Optional<String>> title = player.memory(Key.sparrow("title"), ValueCodecs.STRING).register().join();
 SortableMemoryKey<UUID> level = player.memoryLong(Key.sparrow("level")).sortable().register().join();
-MemoryMapKey<UUID, String, Home> homes = player.memoryMap(Key.sparrow("homes"), EntryKeyCodec.STRING, HOME).register().join();
 
 // DB keys: usable as soon as register() returns
 DbKey<UUID, Profile> profile = player.db(Key.sparrow("profile"), PROFILE, Profile.EMPTY).register();
 SortableDbCounterKey<UUID> coins = player.dbCounter(Key.sparrow("coins")).scale(2).sortable().register();
-DbMapKey<UUID, String, Mail> mailbox = player.dbMap(Key.sparrow("mailbox"), EntryKeyCodec.STRING, MAIL).register();
-DbMapCounterKey<UUID, String> tokens = player.dbMapCounter(Key.sparrow("tokens"), EntryKeyCodec.STRING).register();
 ```
 
 - Type names are 1 to 32 characters of `[a-z0-9_]`. Key ids are at most 64 characters and may not contain `.`. An encoded entity id is at most 64 bytes.
 - Registering without a default value makes the value type `Optional<T>`; writing `Optional.empty()` deletes the stored value.
-- `memoryLong` keys and DB counter keys can be `sortable()`, which enables `top` and `rankOf`. Map counter keys can't be ranked.
+- `memoryLong` keys and DB counter keys can be `sortable()`, which enables `top` and `rankOf`.
 - Keys can be registered and unregistered at runtime. `unregister` keeps the data; `purge(Key)` deletes a key's data across all entities and must only be called once no server has the key registered.
 - `entity.delete()` removes all data of one entity. No server may hold it at that moment.
+- There are no map keys. When the entries are fixed or come from config, register one key per entry, such as one counter key per currency. When they are not fixed but few, put the whole collection into one value, such as `MemoryKey<UUID, List<Home>>`. When there are many, or they need queries and constraints, use your own table with a view key.
 
 ## Memory authority
 
@@ -89,7 +87,6 @@ player.residence().online(uuid);          // load memory keys, start auto save
 Entity<UUID> entity = player.entity(uuid);
 entity.write(mana, 80);
 entity.update(level, current -> current + 1);
-entity.put(homes, "base", home);
 int value = entity.get(mana);
 
 entity.publish(mana);                     // push the current value into other servers' snapshots, no save
@@ -99,7 +96,7 @@ player.residence().offline(uuid);         // release, then save what was written
 ```
 
 - Memory reads and writes only work on the holder; anywhere else they throw `IllegalStateException`. All modifications and saves of one entity are serialized by a per-entity lock.
-- Values you get back must not be mutated in place. Return a new value from `update` / `compute` instead.
+- Values you get back must not be mutated in place. Return a new value from `update` instead.
 - Other servers use `peek` (snapshot; `null` until loaded, the first call starts the load) or `read` (a future that reads storage).
 - `override(key, value)` / `reset(key)` work from any server, whether or not anyone holds the entity: the value is written to storage and pushed to the holder.
 - Unsaved memory data is lost if the server crashes; the save interval bounds the loss.
@@ -114,7 +111,6 @@ entity.take(coins, price).thenAccept(balance -> {
     }
 });
 entity.update(profile, current -> current.withMotto("hello"));
-entity.putIfAbsent(mailbox, mailId, mail);
 
 CompletableFuture<TransferResult> result = data.transaction(tx -> {
     OptionalLong balance = tx.take(from, coins, amount);
@@ -132,7 +128,7 @@ player.rankOf(coins, uuid);
 
 - `update` is a CAS loop on the stored bytes, so its operator may run several times and must be free of side effects. An update that encodes to the same bytes neither writes nor broadcasts.
 - The value a transaction body returns becomes the result of the future. A normal return commits; after `tx.rollback()` the transaction rolls back and the return value still reaches the caller. A transaction body may run again after a deadlock. Anything it throws, `Error` included, rolls the transaction back. After commit, the values the transaction wrote are put into this server's existing snapshots first, then invalidations are broadcast; a rolled back transaction touches neither.
-- Counters treat a missing value or entry as 0. `take` fails without writing when the balance is too low.
+- Counters treat a missing value as 0. `take` fails without writing when the balance is too low.
 - `top` and `rankOf` read the ranking table. Memory keys reach it when they are saved, so their ranking lags by up to one save interval.
 
 ## Watching scalar values
@@ -241,7 +237,7 @@ static final ValueCodec<Home> HOME = ValueCodec.struct(
 
 ## Watching values
 
-`watch` notifies when the visible value of a key (or one map entry) may have changed: the holder's value while this server holds the entity, the snapshot otherwise. The callback carries no value; read it with `peek`.
+`watch` notifies when the visible value of a key may have changed: the holder's value while this server holds the entity, the snapshot otherwise. The callback carries no value; read it with `peek`.
 
 ```java
 // open a menu for an offline player without a loading state, then keep it in sync
@@ -262,7 +258,7 @@ watch.close();
 
 ## Decimal counters
 
-`dbCounter`, `dbMapCounter` and `memoryLong` accept `scale(int)` (0 to 18). The key still stores and exchanges a `long` in minor units; the scale only drives conversion:
+`dbCounter` and `memoryLong` accept `scale(int)` (0 to 18). The key still stores and exchanges a `long` in minor units; the scale only drives conversion:
 
 ```java
 long units = coins.toUnits(new BigDecimal("19.99"), RoundingMode.UNNECESSARY); // 1999
@@ -277,4 +273,4 @@ double forVault = coins.toDouble(units);
 
 - Redis and the database are assumed to be available. Lost messages and infrastructure failures are not compensated.
 - An override that arrives while the holder is doing its final save on `offline` can be lost: the save writes the old value back, and the released holder drops the message.
-- A map value nested inside an entry is stored as one value; map counter keys can't be ranked.
+- A collection kept inside one value is stored as a single row and rewritten as a whole on every change.

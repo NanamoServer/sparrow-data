@@ -12,7 +12,7 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
         return new MariaDbTables(baseName + "_data", baseName + "_ranked", baseName + "_rank");
     }
 
-    // path 和 data_key 按字节比较, PathCodec 的条目范围查询依赖这个排序
+    // path 存的是键 ID, 和 data_key 一样按字节比较, 键 ID 区分大小写
     @NotNull
     List<String> createStatements() {
         return List.of(
@@ -66,11 +66,6 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
     }
 
     @NotNull
-    String selectEntries() {
-        return "SELECT path, num, val FROM " + this.data + " WHERE entity_id = ? AND path >= ? AND path < ?";
-    }
-
-    @NotNull
     String compareAndSetData() {
         return "UPDATE " + this.data + " SET val = ? WHERE entity_id = ? AND path = ? AND val = ?";
     }
@@ -97,7 +92,7 @@ record MariaDbTables(@NotNull String data, @NotNull String ranked, @NotNull Stri
 
     @NotNull
     String purgeDataBatch(int limit) {
-        return "DELETE FROM " + this.data + " WHERE path = ? OR (path >= ? AND path < ?) LIMIT " + limit;
+        return "DELETE FROM " + this.data + " WHERE path = ? LIMIT " + limit;
     }
 
     @NotNull

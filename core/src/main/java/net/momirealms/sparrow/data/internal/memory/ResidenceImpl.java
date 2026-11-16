@@ -96,7 +96,7 @@ public final class ResidenceImpl<K> implements Residence<K> {
         return CompletableFuture.supplyAsync(
                 () -> {
                     // 没有内存键的类型不读库, 它的存储可能还没准备
-                    StoredEntity stored = keys.isEmpty() ? new StoredEntity(Map.of(), Map.of()) : this.service.storage().load(ref, storageKeys(keys));
+                    StoredEntity stored = keys.isEmpty() ? new StoredEntity(Map.of()) : this.service.storage().load(ref, storageKeys(keys));
                     return HeldEntity.decode(keys, stored);
                 },
                 this.service.executor()

@@ -19,8 +19,8 @@ public sealed interface ValueForm<T> {
     @Nullable
     T load(@Nullable StoredValue stored);
 
-    // 用 ValueCodec 编成字节. 存储里没有值时读到 fallback, 映射键的条目没有 fallback
-    record CodecForm<T>(@NotNull ValueCodec<T> codec, @Nullable T fallback) implements ValueForm<T> {
+    // 用 ValueCodec 编成字节. 存储里没有值时读到 fallback
+    record CodecForm<T>(@NotNull ValueCodec<T> codec, @NotNull T fallback) implements ValueForm<T> {
 
         @NotNull
         @Override

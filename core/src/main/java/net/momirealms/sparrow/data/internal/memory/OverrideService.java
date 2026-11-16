@@ -36,30 +36,30 @@ public final class OverrideService<K> {
     }
 
     // 发起端. 在 Executor 上写库, 写完广播覆盖消息, future 在写库完成后结束.
-    // value 为 null 是重置, 普通键删掉存储的值, 映射键删掉这个条目
+    // value 为 null 是重置, 删掉存储的值
     @NotNull
-    public <T> CompletableFuture<Void> override(@NotNull EntityRef ref, @NotNull StorageKey key, @Nullable String entry, @NotNull ValueForm<T> form, @Nullable T value) {
+    public <T> CompletableFuture<Void> override(@NotNull EntityRef ref, @NotNull StorageKey key, @NotNull ValueForm<T> form, @Nullable T value) {
         EntityStorage storage = this.service.storage();
         return CompletableFuture.supplyAsync(() -> {
             StoredValue stored = value == null ? null : form.store(value);
             if (stored == null) {
-                storage.remove(ref, key, entry);
+                storage.remove(ref, key);
             } else {
-                storage.set(ref, key, entry, stored);
+                storage.set(ref, key, stored);
             }
             return stored;
-        }, this.service.executor()).thenAccept(stored -> this.service.messenger().override(ref.entityType(), ref.entityId(), key.id(), entry, stored));
+        }, this.service.executor()).thenAccept(stored -> this.service.messenger().override(ref.entityType(), ref.entityId(), key.id(), stored));
     }
 
     // 持有端, 在 Redis 的订阅线程上直接应用, 订阅线程只有一个, 覆盖按收到的顺序应用.
     // 本服没注册这个键, 或者既没持有也没在加载这个实体时什么都不做, 快照的重读已经由失效处理了
-    public void receive(@NotNull K id, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue stored) {
+    public void receive(@NotNull K id, @NotNull String keyId, @Nullable StoredValue stored) {
         HeldEntity<K> held;
         Received<K> received;
         synchronized (this.lock) {
             AbstractDataKey<K> key = this.type.keys().get(Key.of(keyId));
             if (key == null) return;
-            received = new Received<>(key, entry, stored);
+            received = new Received<>(key, stored);
             List<Received<K>> buffer = this.loading.get(id);
             if (buffer != null) {
                 buffer.add(received);
@@ -76,8 +76,8 @@ public final class OverrideService<K> {
                 return;
             }
         }
-        held.override(received.key(), received.entry(), received.stored());
-        this.type.watches().touch(id, keyId, entry);
+        held.override(received.key(), received.stored());
+        this.type.watches().touch(id, keyId);
     }
 
     // online 开始读库之前调用. 读库可能发生在某次覆盖写库之前, 读出来的是旧值, 所以从这里开始收到的覆盖先缓冲
@@ -158,10 +158,10 @@ public final class OverrideService<K> {
         int size = buffer.size();
         for (int i = 0; i < size; i++) {
             Received<K> received = buffer.get(i);
-            held.override(received.key(), received.entry(), received.stored());
+            held.override(received.key(), received.stored());
         }
     }
 
-    private record Received<K>(@NotNull AbstractDataKey<K> key, @Nullable String entry, @Nullable StoredValue stored) {
+    private record Received<K>(@NotNull AbstractDataKey<K> key, @Nullable StoredValue stored) {
     }
 }

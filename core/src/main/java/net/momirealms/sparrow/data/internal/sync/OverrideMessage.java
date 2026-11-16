@@ -17,16 +17,14 @@ public final class OverrideMessage extends OneWayMessage {
     private final String entityType;
     private final byte[] entityId;
     private final String keyId;
-    private final @Nullable String entry;
     private final @Nullable StoredValue value;
 
-    // 覆盖一个键或一个条目. value 为空表示重置, 持有者删掉这个值或条目
-    OverrideMessage(@NotNull DataMessenger messenger, @NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable String entry, @Nullable StoredValue value) {
+    // 覆盖一个键. value 为空表示重置, 持有者删掉这个值
+    OverrideMessage(@NotNull DataMessenger messenger, @NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
         this.messenger = messenger;
         this.entityType = entityType;
         this.entityId = entityId;
         this.keyId = keyId;
-        this.entry = entry;
         this.value = value;
     }
 
@@ -35,7 +33,6 @@ public final class OverrideMessage extends OneWayMessage {
         this.entityType = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.entityId = ByteBufHelper.readByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
         this.keyId = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        this.entry = Utils.readNullableUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.value = StoredValueCodec.read(buf);
     }
 
@@ -43,7 +40,6 @@ public final class OverrideMessage extends OneWayMessage {
         ByteBufHelper.writeUtf8(buf, this.entityType, DataMessenger.MAX_TEXT_LENGTH);
         ByteBufHelper.writeByteArray(buf, this.entityId);
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
-        Utils.writeNullableUtf8(buf, this.entry, DataMessenger.MAX_TEXT_LENGTH);
         StoredValueCodec.write(buf, this.value);
     }
 
@@ -70,11 +66,6 @@ public final class OverrideMessage extends OneWayMessage {
     @NotNull
     String keyId() {
         return this.keyId;
-    }
-
-    @Nullable
-    String entry() {
-        return this.entry;
     }
 
     @Nullable

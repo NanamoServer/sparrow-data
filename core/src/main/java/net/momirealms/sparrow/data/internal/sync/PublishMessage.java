@@ -9,9 +9,6 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.HashMap;
-import java.util.Map;
-
 @ApiStatus.Internal
 public final class PublishMessage extends OneWayMessage {
     static final MessageIdentifier ID = MessageIdentifier.of(DataMessenger.NAMESPACE, "publish");
@@ -21,24 +18,14 @@ public final class PublishMessage extends OneWayMessage {
     private final byte[] entityId;
     private final String keyId;
     private final @Nullable StoredValue value;
-    private final @Nullable Map<String, StoredValue> entries;
 
-    // 持有方 publish 一个键的当前值, 不落库, 收到的服直接把值放进快照. entries 不为空时是映射键的全部条目,
-    // 否则是普通键的值, value 为空表示没有值
-    PublishMessage(
-            @NotNull DataMessenger messenger,
-            @NotNull String entityType,
-            byte @NotNull [] entityId,
-            @NotNull String keyId,
-            @Nullable StoredValue value,
-            @Nullable Map<String, StoredValue> entries
-    ) {
+    // 持有方 publish 一个键的当前值, 不落库, 收到的服直接把值放进快照. value 为空表示没有值
+    PublishMessage(@NotNull DataMessenger messenger, @NotNull String entityType, byte @NotNull [] entityId, @NotNull String keyId, @Nullable StoredValue value) {
         this.messenger = messenger;
         this.entityType = entityType;
         this.entityId = entityId;
         this.keyId = keyId;
         this.value = value;
-        this.entries = entries;
     }
 
     PublishMessage(@NotNull DataMessenger messenger, @NotNull ByteBuf buf) {
@@ -46,35 +33,14 @@ public final class PublishMessage extends OneWayMessage {
         this.entityType = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
         this.entityId = ByteBufHelper.readByteArray(buf, DataMessenger.MAX_ENTITY_ID_LENGTH);
         this.keyId = ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH);
-        if (buf.readBoolean()) {
-            int size = ByteBufHelper.readCompactInt(buf);
-            Map<String, StoredValue> entries = HashMap.newHashMap(size);
-            for (int i = 0; i < size; i++) {
-                entries.put(ByteBufHelper.readUtf8(buf, DataMessenger.MAX_TEXT_LENGTH), StoredValueCodec.read(buf));
-            }
-            this.value = null;
-            this.entries = entries;
-        } else {
-            this.value = StoredValueCodec.read(buf);
-            this.entries = null;
-        }
+        this.value = StoredValueCodec.read(buf);
     }
 
-    // 先写一个 boolean 表示是不是映射键, 映射键再写条目数和每个条目
     void write(@NotNull ByteBuf buf) {
         ByteBufHelper.writeUtf8(buf, this.entityType, DataMessenger.MAX_TEXT_LENGTH);
         ByteBufHelper.writeByteArray(buf, this.entityId);
         ByteBufHelper.writeUtf8(buf, this.keyId, DataMessenger.MAX_TEXT_LENGTH);
-        buf.writeBoolean(this.entries != null);
-        if (this.entries == null) {
-            StoredValueCodec.write(buf, this.value);
-            return;
-        }
-        ByteBufHelper.writeCompactInt(buf, this.entries.size());
-        this.entries.forEach((entry, value) -> {
-            ByteBufHelper.writeUtf8(buf, entry, DataMessenger.MAX_TEXT_LENGTH);
-            StoredValueCodec.write(buf, value);
-        });
+        StoredValueCodec.write(buf, this.value);
     }
 
     @Override
@@ -105,10 +71,5 @@ public final class PublishMessage extends OneWayMessage {
     @Nullable
     StoredValue value() {
         return this.value;
-    }
-
-    @Nullable
-    Map<String, StoredValue> entries() {
-        return this.entries;
     }
 }

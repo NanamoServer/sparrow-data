@@ -63,48 +63,42 @@ public final class MariaDbEntityStorage implements EntityStorage {
 
     @Nullable
     @Override
-    public StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
-        return this.withConnection(storage -> storage.read(entity, key, entry));
-    }
-
-    @NotNull
-    @Override
-    public Map<String, StoredValue> readEntries(@NotNull EntityRef entity, @NotNull StorageKey key) {
-        return this.withConnection(storage -> storage.readEntries(entity, key));
+    public StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key) {
+        return this.withConnection(storage -> storage.read(entity, key));
     }
 
     @Override
-    public void set(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, @NotNull StoredValue value) {
+    public void set(@NotNull EntityRef entity, @NotNull StorageKey key, @NotNull StoredValue value) {
         this.withConnection(storage -> {
-            storage.set(entity, key, entry, value);
+            storage.set(entity, key, value);
             return null;
         });
     }
 
     @Override
-    public boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @Nullable [] expected, byte @NotNull [] value) {
-        return this.withConnection(storage -> storage.compareAndSet(entity, key, entry, expected, value));
+    public boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, byte @Nullable [] expected, byte @NotNull [] value) {
+        return this.withConnection(storage -> storage.compareAndSet(entity, key, expected, value));
     }
 
     @Override
-    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected) {
-        return this.withConnection(storage -> storage.compareAndRemove(entity, key, entry, expected));
+    public boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, byte @NotNull [] expected) {
+        return this.withConnection(storage -> storage.compareAndRemove(entity, key, expected));
     }
 
     @Override
-    public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry) {
-        return this.withConnection(storage -> storage.remove(entity, key, entry));
+    public boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key) {
+        return this.withConnection(storage -> storage.remove(entity, key));
     }
 
     @Override
-    public long add(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long delta) {
-        return this.withConnection(storage -> storage.add(entity, key, entry, delta));
+    public long add(@NotNull EntityRef entity, @NotNull StorageKey key, long delta) {
+        return this.withConnection(storage -> storage.add(entity, key, delta));
     }
 
     @NotNull
     @Override
-    public OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long amount) {
-        return this.inTransaction(storage -> storage.take(entity, key, entry, amount));
+    public OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, long amount) {
+        return this.inTransaction(storage -> storage.take(entity, key, amount));
     }
 
     @NotNull

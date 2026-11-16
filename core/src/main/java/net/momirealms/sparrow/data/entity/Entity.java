@@ -2,19 +2,14 @@ package net.momirealms.sparrow.data.entity;
 
 import net.momirealms.sparrow.data.key.DbCounterKey;
 import net.momirealms.sparrow.data.key.DbKey;
-import net.momirealms.sparrow.data.key.DbMapCounterKey;
-import net.momirealms.sparrow.data.key.DbMapKey;
-import net.momirealms.sparrow.data.key.MapKey;
 import net.momirealms.sparrow.data.key.MemoryDataKey;
 import net.momirealms.sparrow.data.key.MemoryKey;
-import net.momirealms.sparrow.data.key.MemoryMapKey;
 import net.momirealms.sparrow.data.key.RosterKey;
 import net.momirealms.sparrow.data.key.ValueKey;
 import net.momirealms.sparrow.data.key.ViewKey;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.UnaryOperator;
@@ -30,7 +25,7 @@ public interface Entity<K> {
 
     boolean isHeld();
 
-    // 读到的值由持有容器和快照共享, 不能原地修改, BYTES 读出的数组也一样. 要改就在 update 或 compute 里返回新值
+    // 读到的值由持有容器和快照共享, 不能原地修改, BYTES 读出的数组也一样. 要改就在 update 里返回新值
     @NotNull
     <T> T get(@NotNull MemoryKey<K, T> key);
 
@@ -38,19 +33,6 @@ public interface Entity<K> {
 
     @NotNull
     <T> T update(@NotNull MemoryKey<K, T> key, @NotNull UnaryOperator<T> operator);
-
-    @Nullable
-    <E, V> V get(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry);
-
-    @NotNull
-    <E, V> Map<E, V> getAll(@NotNull MemoryMapKey<K, E, V> key);
-
-    <E, V> void put(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    <E, V> void remove(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry);
-
-    @Nullable
-    <E, V> V compute(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<@Nullable V> operator);
 
     void publish(@NotNull MemoryDataKey<K> key);
 
@@ -64,22 +46,10 @@ public interface Entity<K> {
     CompletableFuture<Void> reset(@NotNull MemoryKey<K, ?> key);
 
     @NotNull
-    <E, V> CompletableFuture<Void> override(@NotNull MemoryMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    @NotNull
-    <E> CompletableFuture<Void> reset(@NotNull MemoryMapKey<K, E, ?> key, @NotNull E entry);
-
-    @NotNull
     <T> Watch watch(@NotNull ValueKey<K, T> key, @NotNull Runnable onChange);
 
     @NotNull
-    <E> Watch watch(@NotNull MapKey<K, E, ?> key, @NotNull E entry, @NotNull Runnable onChange);
-
-    @NotNull
     <T> Pin pin(@NotNull ValueKey<K, T> key);
-
-    @NotNull
-    <E> Pin pin(@NotNull MapKey<K, E, ?> key, @NotNull E entry);
 
     // 视图背后的数据变了之后调用. 本服有这个快照时重读, 并通知其他服务器重读.
     // future 在本服这次重读写进快照后完成, 重读失败时带着 loader 的异常失败, 快照保留旧值; 本服没有这个快照时立即完成
@@ -106,22 +76,8 @@ public interface Entity<K> {
     @Nullable
     <T> T peek(@NotNull ValueKey<K, T> key);
 
-    @Nullable
-    <E, V> V peek(@NotNull MapKey<K, E, V> key, @NotNull E entry);
-
-    <E> boolean isLoaded(@NotNull MapKey<K, E, ?> key, @NotNull E entry);
-
-    @Nullable
-    <E, V> Map<E, V> peekAll(@NotNull MapKey<K, E, V> key);
-
     @NotNull
     <T> CompletableFuture<T> read(@NotNull ValueKey<K, T> key);
-
-    @NotNull
-    <E, V> CompletableFuture<@Nullable V> read(@NotNull MapKey<K, E, V> key, @NotNull E entry);
-
-    @NotNull
-    <E, V> CompletableFuture<Map<E, V>> readAll(@NotNull MapKey<K, E, V> key);
 
     @NotNull
     <T> CompletableFuture<Void> set(@NotNull DbKey<K, T> key, @NotNull T value);
@@ -137,30 +93,6 @@ public interface Entity<K> {
 
     @NotNull
     CompletableFuture<OptionalLong> take(@NotNull DbCounterKey<K> key, long amount);
-
-    @NotNull
-    <E, V> CompletableFuture<Void> put(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    @NotNull
-    <E, V> CompletableFuture<Boolean> putIfAbsent(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull V value);
-
-    @NotNull
-    <E, V> CompletableFuture<@Nullable V> update(@NotNull DbMapKey<K, E, V> key, @NotNull E entry, @NotNull UnaryOperator<V> operator);
-
-    @NotNull
-    <E> CompletableFuture<Boolean> remove(@NotNull DbMapKey<K, E, ?> key, @NotNull E entry);
-
-    @NotNull
-    <E> CompletableFuture<Void> set(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long value);
-
-    @NotNull
-    <E> CompletableFuture<Long> add(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long delta);
-
-    @NotNull
-    <E> CompletableFuture<OptionalLong> take(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry, long amount);
-
-    @NotNull
-    <E> CompletableFuture<Boolean> remove(@NotNull DbMapCounterKey<K, E> key, @NotNull E entry);
 
     @NotNull
     CompletableFuture<Void> delete();

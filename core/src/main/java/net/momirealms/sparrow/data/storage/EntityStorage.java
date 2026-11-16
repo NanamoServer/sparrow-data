@@ -6,7 +6,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.OptionalLong;
 import java.util.function.Predicate;
 
@@ -22,23 +21,20 @@ public interface EntityStorage {
     void save(@NotNull EntityRef entity, @NotNull SaveBatch batch);
 
     @Nullable
-    StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry);
+    StoredValue read(@NotNull EntityRef entity, @NotNull StorageKey key);
+
+    void set(@NotNull EntityRef entity, @NotNull StorageKey key, @NotNull StoredValue value);
+
+    boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, byte @Nullable [] expected, byte @NotNull [] value);
+
+    boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, byte @NotNull [] expected);
+
+    boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key);
+
+    long add(@NotNull EntityRef entity, @NotNull StorageKey key, long delta);
 
     @NotNull
-    Map<String, StoredValue> readEntries(@NotNull EntityRef entity, @NotNull StorageKey key);
-
-    void set(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, @NotNull StoredValue value);
-
-    boolean compareAndSet(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @Nullable [] expected, byte @NotNull [] value);
-
-    boolean compareAndRemove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, byte @NotNull [] expected);
-
-    boolean remove(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry);
-
-    long add(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long delta);
-
-    @NotNull
-    OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, @Nullable String entry, long amount);
+    OptionalLong take(@NotNull EntityRef entity, @NotNull StorageKey key, long amount);
 
     @NotNull
     List<RankRow> top(@NotNull String entityType, @NotNull StorageKey key, int offset, int limit);
@@ -47,7 +43,7 @@ public interface EntityStorage {
 
     void deleteEntity(@NotNull EntityRef entity);
 
-    // 跨所有实体删除这个键 ID 下的全部数据, 普通值, 映射条目和排行数据都删. 调用时键已经注销, 数据层不知道它是不是 sortable
+    // 跨所有实体删除这个键 ID 下的全部数据, 数据表和排行表都删. 调用时键已经注销, 数据层不知道它是不是 sortable
     void purge(@NotNull String entityType, @NotNull String keyId);
 
     boolean transaction(@NotNull Predicate<EntityStorage> body);
